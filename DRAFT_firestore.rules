@@ -1,0 +1,155 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // -------------------------------------------------------------------------
+    // Phase 3: Primitive Definition (Reusable Helpers)
+    // -------------------------------------------------------------------------
+    
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    
+    function incoming() { 
+      return request.resource.data; 
+    }
+    
+    function existing() { 
+      return resource.data; 
+    }
+    
+    function isSignedIn() { 
+      return request.auth != null; 
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Role lookups
+    function getUserData() {
+      return get(/databases/$(database)/documents/employees/$(request.auth.uid)).data;
+    }
+
+    function hasRole(role) {
+      return isSignedIn() && getUserData().role == role;
+    }
+
+    function isAdmin() { return hasRole('Admin'); }
+    function isAccountant() { return hasRole('Accountant'); }
+    function isManager() { return hasRole('Manager'); }
+
+    // -------------------------------------------------------------------------
+    // Pillar 1: Global Safety Net
+    // -------------------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: employees
+    // -------------------------------------------------------------------------
+    match /employees/{employeeId} {
+      function isValidEmployee(data) {
+        return data.keys().hasAll(['id', 'name', 'role', 'pinHash', 'isActive']) &&
+               data.id is string && data.name is string && data.name.size() <= 100 &&
+               data.role in ['Employee', 'Manager', 'Accountant', 'Admin'] &&
+               data.pinHash is string && data.isActive is bool;
+      }
+
+      allow read: if isSignedIn(); // Basic read for app flow (finding users)
+      
+      allow create: if isSignedIn() && isValidEmployee(incoming()) && 
+                       incoming().id == employeeId &&
+                       incoming().isActive == false; // New registrations start inactive
+      
+      allow update: if isSignedIn() && isValidEmployee(incoming()) && (
+        // Admin can update anything
+        isAdmin() ||
+        // User can update their own non-role fields
+        (isOwner(employeeId) && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['nickname', 'profileImage', 'pinHash', 'plainPin', 'bankName', 'bankNo', 'bankAccountName', 'lineUserId']))
+      );
+      
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: advances
+    // -------------------------------------------------------------------------
+    match /advances/{advId} {
+      function isValidAdvance(data) {
+        return data.keys().hasAll(['id', 'advId', 'employeeId', 'employeeName', 'projectId', 'requestAmount', 'status', 'createdAt']) &&
+               data.id is string && data.advId is string &&
+               data.employeeId is string && data.employeeName is string &&
+               data.projectId is string && data.requestAmount is number &&
+               data.status is string && data.createdAt is string;
+      }
+
+      allow read: if isSignedIn(); // Accountants and managers need to see advances
+      
+      allow create: if isSignedIn() && isValidAdvance(incoming()) && isOwner(incoming().employeeId);
+      
+      allow update: if isSignedIn() && isValidAdvance(incoming()) && (
+        isAdmin() || isAccountant() ||
+        (isOwner(existing().employeeId) && existing().status in ['DRAFT', 'RETURNED']) ||
+        (isManager() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'approvedAt', 'approvedBy']))
+      );
+      
+      allow delete: if isAdmin() || (isOwner(existing().employeeId) && existing().status == 'DRAFT');
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: clearingLogs
+    // -------------------------------------------------------------------------
+    match /clearingLogs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: clearingItems
+    // -------------------------------------------------------------------------
+    match /clearingItems/{itemId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: vaultFiles
+    // -------------------------------------------------------------------------
+    match /vaultFiles/{fileId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: auditLogs
+    // -------------------------------------------------------------------------
+    match /auditLogs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: settings
+    // -------------------------------------------------------------------------
+    match /settings/{settingId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    
+    // Support for doc(db, "test", "connection")
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}

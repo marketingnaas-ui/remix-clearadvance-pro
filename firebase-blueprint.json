@@ -1,0 +1,184 @@
+{
+  "entities": {
+    "Employee": {
+      "title": "Employee",
+      "description": "Information about an employee, their role, and authentication status.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique identifier for the employee." },
+        "uid": { "type": "string", "description": "The Firebase Auth UID linked to this employee." },
+        "username": { "type": "string", "description": "The unique username used for registration." },
+        "employeeCode": { "type": "string", "description": "The formatted employee code." },
+        "name": { "type": "string", "description": "The full name of the employee." },
+        "nickname": { "type": "string", "description": "The nickname of the employee." },
+        "role": { "type": "string", "enum": ["Employee", "Manager", "Accountant", "Admin"], "description": "The role assigned to the employee." },
+        "pinHash": { "type": "string", "description": "The SHA-256 hashed PIN." },
+        "plainPin": { "type": "string", "description": "The plain-text PIN (for admin reset)." },
+        "lineUserId": { "type": "string", "description": "The LINE User ID for notifications." },
+        "bankName": { "type": "string", "description": "The name of the bank for transfers." },
+        "bankNo": { "type": "string", "description": "The bank account number." },
+        "bankAccountName": { "type": "string", "description": "The bank account holder name." },
+        "isActive": { "type": "boolean", "description": "Whether the employee account is active." },
+        "profileImage": { "type": "string", "description": "Base64 or URL of the profile image." },
+        "status": { "type": "string", "enum": ["Active", "Disabled", "Suspended"], "description": "The current status of the employee." },
+        "isApprovedByAdmin": { "type": "boolean", "description": "Whether the registration has been approved." }
+      },
+      "required": ["id", "name", "role", "pinHash", "isActive"]
+    },
+    "Advance": {
+      "title": "Advance",
+      "description": "A request for a cash advance.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "advId": { "type": "string", "description": "Formatted ADV ID." },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "projectId": { "type": "string" },
+        "category": { "type": "string" },
+        "requestAmount": { "type": "number" },
+        "approvedClearingAmountTotal": { "type": "number" },
+        "outstandingAmount": { "type": "number" },
+        "status": { "type": "string", "enum": ["DRAFT", "PENDING_APPROVAL", "WAITING_TRANSFER", "WAITING_CLEARANCE", "PENDING_AUDIT", "PARTIALLY_CLEARED", "RETURNED", "REJECTED", "CLOSED"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "approvedAt": { "type": "string", "format": "date-time" },
+        "approvedBy": { "type": "string" },
+        "transferredAt": { "type": "string", "format": "date-time" },
+        "transferSlipUrl": { "type": "string" },
+        "closedAt": { "type": "string", "format": "date-time" },
+        "settlementResult": { "type": "number" },
+        "details": { "type": "string" },
+        "neededDate": { "type": "string", "format": "date" },
+        "note": { "type": "string" },
+        "attachmentUrl": { "type": "string" }
+      },
+      "required": ["id", "advId", "employeeId", "employeeName", "projectId", "requestAmount", "status", "createdAt"]
+    },
+    "ClearingLog": {
+      "title": "ClearingLog",
+      "description": "A log for a batch of clearing items submitted by an employee.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "advId": { "type": "string" },
+        "roundNo": { "type": "integer" },
+        "submittedBy": { "type": "string" },
+        "submittedAt": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["DRAFT", "PENDING", "APPROVED", "RETURNED", "PARTIAL"] },
+        "totalSubmittedAmount": { "type": "number" },
+        "totalApprovedAmount": { "type": "number" },
+        "accountantNote": { "type": "string" },
+        "returnedReason": { "type": "string" }
+      },
+      "required": ["id", "advId", "roundNo", "submittedBy", "submittedAt", "status"]
+    },
+    "ClearingItem": {
+      "title": "ClearingItem",
+      "description": "An individual expense item within a clearing batch.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "clearingLogId": { "type": "string" },
+        "advId": { "type": "string" },
+        "roundNo": { "type": "integer" },
+        "vendorName": { "type": "string" },
+        "vendorTaxId": { "type": "string" },
+        "documentType": { "type": "string" },
+        "invoiceNo": { "type": "string" },
+        "documentDate": { "type": "string", "format": "date" },
+        "itemName": { "type": "string" },
+        "qty": { "type": "number" },
+        "unitPrice": { "type": "number" },
+        "vatType": { "type": "string", "enum": ["INCLUDED", "EXCLUDED", "NONE"] },
+        "vatAmount": { "type": "number" },
+        "whtRate": { "type": "string", "enum": ["NONE", "1%", "3%", "5%"] },
+        "whtAmount": { "type": "number" },
+        "discount": { "type": "number" },
+        "otherExpenses": { "type": "number" },
+        "netAmount": { "type": "number" },
+        "imageUrl": { "type": "string" },
+        "ocrConfidence": { "type": "number" },
+        "isDuplicate": { "boolean": true },
+        "accountantApproved": { "boolean": true },
+        "rawOcrJson": { "type": "string" }
+      },
+      "required": ["id", "clearingLogId", "advId", "roundNo", "vendorName", "documentType", "documentDate", "itemName", "qty", "unitPrice", "netAmount"]
+    },
+    "VaultFile": {
+      "title": "VaultFile",
+      "description": "Files stored in the secure vault.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "advId": { "type": "string" },
+        "fileType": { "type": "string", "enum": ["REQUEST", "SLIP", "RECEIPT", "SETTLEMENT", "LOG"] },
+        "fileUrl": { "type": "string" },
+        "fileName": { "type": "string" },
+        "uploadedBy": { "type": "string" },
+        "uploadedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "advId", "fileType", "fileUrl", "fileName", "uploadedBy", "uploadedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "A log of actions performed in the system.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "advId": { "type": "string" },
+        "actionType": { "type": "string" },
+        "actionBy": { "type": "string" },
+        "role": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "beforeStatus": { "type": "string" },
+        "afterStatus": { "type": "string" },
+        "note": { "type": "string" },
+        "relatedFileUrl": { "type": "string" }
+      },
+      "required": ["id", "advId", "actionType", "actionBy", "role", "timestamp", "beforeStatus", "afterStatus", "note"]
+    },
+    "SystemSettings": {
+      "title": "SystemSettings",
+      "description": "Global system configuration.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "projects": { "type": "array", "items": { "type": "string" } },
+        "categories": { "type": "array", "items": { "type": "string" } },
+        "documentTypes": { "type": "array", "items": { "type": "string" } },
+        "otherSettings": { "type": "array", "items": { "type": "object" } }
+      },
+      "required": ["id"]
+    }
+  },
+  "firestore": {
+    "employees": {
+      "schema": { "$ref": "#/entities/Employee" },
+      "description": "Stores employee profiles and authentication linkage."
+    },
+    "advances": {
+      "schema": { "$ref": "#/entities/Advance" },
+      "description": "Stores cash advance requests."
+    },
+    "clearingLogs": {
+      "schema": { "$ref": "#/entities/ClearingLog" },
+      "description": "Stores batches of expense clearing submissions."
+    },
+    "clearingItems": {
+      "schema": { "$ref": "#/entities/ClearingItem" },
+      "description": "Stores individual expense items for clearing."
+    },
+    "vaultFiles": {
+      "schema": { "$ref": "#/entities/VaultFile" },
+      "description": "Stores references to files uploaded to storage."
+    },
+    "auditLogs": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Stores a history of system actions for auditing."
+    },
+    "settings": {
+      "schema": { "$ref": "#/entities/SystemSettings" },
+      "description": "Stores global system configuration."
+    }
+  }
+}

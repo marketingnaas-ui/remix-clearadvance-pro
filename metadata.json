@@ -1,0 +1,8 @@
+{
+  "name": "Remix: ClearAdvance PRO",
+  "description": "A complete organizational cash advance platform featuring automated workflows, OCR receipt scanning, and secure digital document management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

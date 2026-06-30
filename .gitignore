@@ -1,0 +1,21 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Local/debug artifacts
+closing_divs.txt
+divs.txt
+*.local
+
+# Credentials
+*service-account*.json
+*firebase-admin*.json
+*credentials*.json
+
+# Firebase local state
+.firebase/
