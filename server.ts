@@ -193,7 +193,7 @@ const enrichLineVariables = async (inputVariables: Record<string, any>, lineConf
   if (employee) {
     variables.employeeName = variables.employeeName || employee.name || employee.fullName || `${employee.firstName || ""} ${employee.lastName || ""}`.trim();
     variables.profileImageUrl = variables.profileImageUrl || employee.profilePhotoURL || employee.photoURL || employee.avatarUrl;
-    variables.bankAccountNo = variables.bankAccountNo || employee.bankAccountNo || employee.bankAccountNumber || employee.accountNumber;
+    variables.bankAccountNo = variables.bankAccountNo || employee.bankNo || employee.bankAccountNo || employee.bankAccountNumber || employee.accountNumber;
     variables.bankName = variables.bankName || employee.bankName || employee.bank;
   }
 

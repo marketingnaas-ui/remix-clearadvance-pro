@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import liff from "@line/liff";
-import { doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, limit, query, serverTimestamp, updateDoc, where } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { CheckCircle2, Copy, Loader2, UploadCloud, X } from "lucide-react";
 import { db, storage } from "../lib/firebase";
@@ -13,15 +13,54 @@ interface BankInfo {
 }
 
 interface AdvanceInfo {
+  docId: string;
   amount: number;
   status: string;
   requesterName: string;
+  employeeId?: string;
 }
 
-const DEFAULT_BANK_INFO: BankInfo = {
-  bankName: "ธนาคารกสิกรไทย",
-  accountName: "บจก. ClearAdvance",
-  accountNumber: "123-4-56789-0",
+const emptyBankInfo: BankInfo = {
+  bankName: "ยังไม่ได้ตั้งค่าธนาคาร",
+  accountName: "ยังไม่ได้ตั้งค่าชื่อบัญชี",
+  accountNumber: "-",
+};
+
+const getAdvanceByCode = async (advCode: string) => {
+  const byId = await getDoc(doc(db, "advances", advCode));
+  if (byId.exists()) return { docId: byId.id, data: byId.data() };
+
+  const byAdvId = await getDocs(query(collection(db, "advances"), where("advId", "==", advCode), limit(1)));
+  if (!byAdvId.empty) {
+    const advDoc = byAdvId.docs[0];
+    return { docId: advDoc.id, data: advDoc.data() };
+  }
+
+  const byAdvanceNo = await getDocs(query(collection(db, "advances"), where("advanceNo", "==", advCode), limit(1)));
+  if (!byAdvanceNo.empty) {
+    const advDoc = byAdvanceNo.docs[0];
+    return { docId: advDoc.id, data: advDoc.data() };
+  }
+
+  return null;
+};
+
+const getEmployeeById = async (employeeId?: string) => {
+  if (!employeeId) return null;
+  const byId = await getDoc(doc(db, "employees", employeeId));
+  if (byId.exists()) return byId.data();
+
+  const byEmployeeId = await getDocs(query(collection(db, "employees"), where("employeeId", "==", employeeId), limit(1)));
+  return byEmployeeId.empty ? null : byEmployeeId.docs[0].data();
+};
+
+const getConfiguredBank = (settings: any): BankInfo => {
+  const bank = settings?.bankInfo || settings?.companyBankInfo || settings?.transferBankInfo || {};
+  return {
+    bankName: bank.bankName || bank.name || emptyBankInfo.bankName,
+    accountName: bank.accountName || bank.bankAccountName || emptyBankInfo.accountName,
+    accountNumber: bank.accountNumber || bank.bankNo || bank.bankAccountNo || emptyBankInfo.accountNumber,
+  };
 };
 
 export default function UploadSlipLiff() {
@@ -38,41 +77,42 @@ export default function UploadSlipLiff() {
   useEffect(() => {
     const initApp = async () => {
       try {
-        const liffId = import.meta.env.VITE_LIFF_UPLOAD_SLIP_ID;
-        if (liffId) {
-          await liff.init({ liffId });
-        }
-
         const urlParams = new URLSearchParams(window.location.search);
-        const currentAdvId = urlParams.get("adv_id");
+        const currentAdvId = urlParams.get("adv_id") || urlParams.get("advId") || urlParams.get("id");
         if (!currentAdvId) throw new Error("ไม่พบเลขที่ ADV จากลิงก์");
 
         setAdvId(currentAdvId);
-        const [advSnapshot, settingsSnapshot] = await Promise.all([
-          getDoc(doc(db, "advances", currentAdvId)),
-          getDoc(doc(db, "settings", "global")),
-        ]);
+        const settingsSnapshot = await getDoc(doc(db, "settings", "global"));
+        const settings = settingsSnapshot.exists() ? settingsSnapshot.data() : {};
+        const configuredLiffId = settings?.lineMessagingConfig?.liffId || settings?.lineConfig?.liffId || import.meta.env.VITE_LIFF_UPLOAD_SLIP_ID;
+        if (configuredLiffId) await liff.init({ liffId: configuredLiffId });
 
-        if (!advSnapshot.exists()) {
-          throw new Error("ไม่พบข้อมูลรายการเบิกนี้ในระบบ");
-        }
+        const advanceRecord = await getAdvanceByCode(currentAdvId);
+        if (!advanceRecord) throw new Error("ไม่พบข้อมูลรายการเบิกนี้ในระบบ");
 
-        const adv = advSnapshot.data();
+        const adv = advanceRecord.data;
+        const employeeId = adv.employeeId || adv.requesterId || adv.userId;
+        const employee = await getEmployeeById(employeeId);
+        const requesterName = adv.employeeName || adv.requesterName || employee?.name || employee?.fullName || "-";
+
         setAdvanceInfo({
-          amount: Number(adv.requestAmount || adv.amount || 0),
+          docId: advanceRecord.docId,
+          amount: Number(adv.requestAmount || adv.amount || adv.totalAmount || adv.advanceAmount || 0),
           status: String(adv.status || ""),
-          requesterName: String(adv.employeeName || adv.requesterName || "-"),
+          requesterName: String(requesterName),
+          employeeId,
         });
 
-        const configuredBank = settingsSnapshot.exists() ? settingsSnapshot.data().bankInfo : null;
-        setBankInfo({
-          bankName: configuredBank?.bankName || DEFAULT_BANK_INFO.bankName,
-          accountName: configuredBank?.accountName || DEFAULT_BANK_INFO.accountName,
-          accountNumber: configuredBank?.accountNumber || DEFAULT_BANK_INFO.accountNumber,
-        });
+        const employeeBank: BankInfo = {
+          bankName: employee?.bankName || "",
+          accountName: employee?.bankAccountName || employee?.name || "",
+          accountNumber: employee?.bankNo || employee?.bankAccountNo || employee?.bankAccountNumber || "",
+        };
+        const configuredBank = getConfiguredBank(settings);
+        setBankInfo(employeeBank.accountNumber ? employeeBank : configuredBank);
       } catch (err: any) {
         console.error("LIFF slip upload initialization failed:", err);
-        setError(err?.message || "ไม่สามารถเปิดหน้าส่งสลิปได้");
+        setError(err?.message || "ไม่สามารถเปิดหน้าแนบสลิปได้");
       } finally {
         setIsInitializing(false);
       }
@@ -90,7 +130,7 @@ export default function UploadSlipLiff() {
   };
 
   const handleCopyAccount = async () => {
-    if (!bankInfo) return;
+    if (!bankInfo?.accountNumber || bankInfo.accountNumber === "-") return;
     await navigator.clipboard.writeText(bankInfo.accountNumber);
     setIsCopied(true);
     window.setTimeout(() => setIsCopied(false), 2000);
@@ -116,7 +156,7 @@ export default function UploadSlipLiff() {
   };
 
   const handleSubmit = async () => {
-    if (!file || !advId) return;
+    if (!file || !advId || !advanceInfo) return;
     setIsUploading(true);
     setError(null);
 
@@ -127,11 +167,12 @@ export default function UploadSlipLiff() {
       const uploadResult = await uploadBytes(storageRef, file);
       const downloadUrl = await getDownloadURL(uploadResult.ref);
 
-      await updateDoc(doc(db, "advances", advId), {
+      await updateDoc(doc(db, "advances", advanceInfo.docId), {
         status: "WAITING_CLEARANCE",
         slipUrl: downloadUrl,
         transferSlipUrl: downloadUrl,
         transferCompletedAt: serverTimestamp(),
+        transferUpdatedFrom: "line_liff",
       });
 
       if (liff.isInClient()) {
@@ -185,6 +226,7 @@ export default function UploadSlipLiff() {
             ฿{advanceInfo.amount.toLocaleString("th-TH", { minimumFractionDigits: 2 })}
           </h2>
           <p className="text-xs text-stone-400">ผู้ขอเบิก: {advanceInfo.requesterName}</p>
+          {advanceInfo.status && <p className="text-[11px] text-stone-400">สถานะปัจจุบัน: {advanceInfo.status}</p>}
         </div>
 
         {bankInfo && (
@@ -193,22 +235,23 @@ export default function UploadSlipLiff() {
             animate={{ opacity: 1, y: 0 }}
             className="bg-white p-5 rounded-2xl shadow-sm border border-stone-100 space-y-3"
           >
-            <div className="flex justify-between items-center border-b border-stone-100 pb-3">
+            <div className="flex justify-between items-center border-b border-stone-100 pb-3 gap-4">
               <span className="text-sm text-stone-500">ธนาคาร</span>
-              <span className="font-medium text-sm">{bankInfo.bankName}</span>
+              <span className="font-medium text-sm text-right">{bankInfo.bankName}</span>
             </div>
-            <div className="flex justify-between items-center border-b border-stone-100 pb-3">
+            <div className="flex justify-between items-center border-b border-stone-100 pb-3 gap-4">
               <span className="text-sm text-stone-500">ชื่อบัญชี</span>
-              <span className="font-medium text-sm">{bankInfo.accountName}</span>
+              <span className="font-medium text-sm text-right">{bankInfo.accountName}</span>
             </div>
-            <div className="flex justify-between items-center pt-1">
+            <div className="flex justify-between items-center pt-1 gap-4">
               <div>
                 <p className="text-sm text-stone-500">เลขที่บัญชี</p>
                 <p className="text-lg font-bold text-stone-900 mt-1">{bankInfo.accountNumber}</p>
               </div>
               <button
                 onClick={handleCopyAccount}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                disabled={!bankInfo.accountNumber || bankInfo.accountNumber === "-"}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
                   isCopied ? "bg-emerald-100 text-emerald-700" : "bg-blue-50 text-blue-600 active:scale-95"
                 }`}
               >
@@ -238,6 +281,8 @@ export default function UploadSlipLiff() {
             </div>
           )}
         </motion.section>
+
+        {error && <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl p-3">{error}</p>}
 
         <button
           onClick={handleSubmit}
