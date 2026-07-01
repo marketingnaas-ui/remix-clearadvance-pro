@@ -72,6 +72,8 @@ import ProjectCostSummary from "./master-data/ProjectCostSummary";
 import AdvanceManagement from "./master-data/AdvanceManagement";
 import ClearingHistory from "./master-data/ClearingHistory";
 import ExpenseItems from "./master-data/ExpenseItems";
+import DataCollectionManager from "./DataCollectionManager";
+import { COLLECTION_SCHEMAS } from "../lib/collectionSchemas";
 
 interface AdminSettingsProps {
   currentEmployee: Employee;
@@ -130,7 +132,8 @@ type AdminSubTab =
 
 export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   const [activeSubTab, setActiveSubTab] = useState<AdminSubTab>("users");
-  const [activeMasterDataTab, setActiveMasterDataTab] = useState<"employees" | "projects" | "project_costs" | "advances" | "clearing" | "expenses">("employees");
+  const [activeMasterDataTab, setActiveMasterDataTab] = useState<"employees" | "projects" | "project_costs" | "advances" | "clearing" | "expenses" | "collections">("employees");
+  const [activeCollectionName, setActiveCollectionName] = useState(COLLECTION_SCHEMAS[0]?.collection || "employees");
   const [workspaceSettings, setWorkspaceSettings] = useState<GoogleWorkspaceSettings>({});
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [syncingSheets, setSyncingSheets] = useState(false);
@@ -2481,6 +2484,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                     { id: "advances", label: "ADV" },
                     { id: "clearing", label: "Clearing" },
                     { id: "expenses", label: "ค่าใช้จ่าย" },
+                    { id: "collections", label: "ฐานข้อมูลทั้งหมด" },
                   ].map((tab) => (
                     <button
                       key={tab.id}
@@ -2503,6 +2507,32 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                 {activeMasterDataTab === "advances" && <AdvanceManagement />}
                 {activeMasterDataTab === "clearing" && <ClearingHistory />}
                 {activeMasterDataTab === "expenses" && <ExpenseItems />}
+                {activeMasterDataTab === "collections" && (
+                  <div className="space-y-4">
+                    <div className="bg-white border border-stone-200 rounded-2xl p-4">
+                      <label className="text-[10px] font-black text-stone-500 uppercase tracking-wide block mb-2">
+                        เลือก Collection / Sheet
+                      </label>
+                      <select
+                        value={activeCollectionName}
+                        onChange={(event) => setActiveCollectionName(event.target.value)}
+                        className="w-full md:w-[420px] px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm font-bold"
+                      >
+                        {COLLECTION_SCHEMAS.map((schema) => (
+                          <option key={schema.collection} value={schema.collection}>
+                            {schema.title}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-stone-500 mt-2">
+                        หน้านี้รองรับ field ตาม schema ที่กำหนดไว้ทั้งหมด เหมาะสำหรับเพิ่ม/แก้ไขข้อมูลจริงใน Firestore โดยตรง
+                      </p>
+                    </div>
+                    {COLLECTION_SCHEMAS.find((schema) => schema.collection === activeCollectionName) && (
+                      <DataCollectionManager schema={COLLECTION_SCHEMAS.find((schema) => schema.collection === activeCollectionName)!} />
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

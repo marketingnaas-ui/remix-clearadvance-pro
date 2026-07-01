@@ -1,6 +1,7 @@
 import { db } from "./firebase";
 import { doc, getDoc, updateDoc, collection, getDocs } from "firebase/firestore";
 import { autoUpdateSystemCollections } from "./systemCollections";
+import { COLLECTION_SCHEMAS, CORE_SHEET_COLLECTIONS, EXTRA_SHEET_COLLECTIONS, CollectionSchema } from "./collectionSchemas";
 
 export interface GoogleWorkspaceSettings {
   spreadsheetId?: string;
@@ -14,6 +15,75 @@ export interface GoogleWorkspaceSettings {
 
 const GOOGLE_TOKEN_STORAGE_KEY = "clearadvance_google_access_token";
 const GOOGLE_TOKEN_EXPIRES_KEY = "clearadvance_google_access_token_expires_at";
+
+const SHEET_TITLES: Record<string, string> = {
+  employees: "Employees",
+  projects: "Projects",
+  project_costs: "ProjectCosts",
+  advances: "Advances",
+  clearingLogs: "ClearingLogs",
+  clearingItems: "ClearingItems",
+  clearingItemLines: "ClearingItemLines",
+  projectSplits: "ProjectSplits",
+  vaultFiles: "VaultFiles",
+  document_tracking: "DocumentTracking",
+  GL: "GL",
+  auditLogs: "AuditLogs",
+  settings: "Settings",
+  aiUsageLogs: "AIUsageLogs",
+  dashboard_cache: "DashboardCache",
+  executive_ai: "ExecutiveAI",
+  syncLog: "SyncLog",
+};
+
+const escapeSheetTitle = (title: string) => `'${title.replace(/'/g, "''")}'`;
+
+function normalizeSheetValue(value: any): any {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return value;
+}
+
+function rowsFromSchema(schema: CollectionSchema, records: any[]) {
+  const headers = schema.fields.map((field) => `${field.label} (${field.key})`);
+  return [
+    headers,
+    ...records.map((record) => schema.fields.map((field) => normalizeSheetValue(record[field.key]))),
+  ];
+}
+
+function derivedClearingItemLines(clearingItems: any[]) {
+  return clearingItems.flatMap((item) =>
+    Array.isArray(item.lineItems)
+      ? item.lineItems.map((line: any, index: number) => ({
+          lineId: line.lineId || `${item.itemId || item.id || "item"}-line-${index + 1}`,
+          itemId: item.itemId || item.id || "",
+          advId: item.advId || "",
+          clearingLogId: item.clearingLogId || "",
+          itemName: line.itemName || "",
+          qty: line.qty || 0,
+          unitPrice: line.unitPrice || 0,
+          amount: line.amount || (Number(line.qty || 0) * Number(line.unitPrice || 0)),
+        }))
+      : []
+  );
+}
+
+function derivedProjectSplits(clearingItems: any[]) {
+  return clearingItems.flatMap((item) =>
+    Array.isArray(item.projectSplits)
+      ? item.projectSplits.map((split: any, index: number) => ({
+          splitId: split.splitId || `${item.itemId || item.id || "item"}-split-${index + 1}`,
+          itemId: item.itemId || item.id || "",
+          advId: item.advId || "",
+          projectId: split.projectId || "",
+          projectName: split.projectName || "",
+          amount: split.amount || 0,
+          percent: split.percent || 0,
+        }))
+      : []
+  );
+}
 
 // Fetch active access token from the environment endpoint
 export async function fetchAccessToken(): Promise<string | null> {
@@ -95,7 +165,7 @@ export async function requestGoogleAccessToken(): Promise<string | null> {
   });
 }
 
-// Create a new Google Spreadsheet with seven sheets for all required collections
+// Create a new Google Spreadsheet with all core and optional reporting sheets.
 export async function createSpreadsheet(token: string): Promise<{ id: string; url: string }> {
   const response = await fetch("https://sheets.googleapis.com/v4/spreadsheets", {
     method: "POST",
@@ -107,15 +177,9 @@ export async function createSpreadsheet(token: string): Promise<{ id: string; ur
       properties: {
         title: "Remix Clear Advance - Complete Financial Database",
       },
-      sheets: [
-        { properties: { title: "Advances" } },
-        { properties: { title: "Clearing Items" } },
-        { properties: { title: "Employees" } },
-        { properties: { title: "Projects" } },
-        { properties: { title: "GL" } },
-        { properties: { title: "Document Tracking" } },
-        { properties: { title: "Project Costs" } },
-      ],
+      sheets: [...CORE_SHEET_COLLECTIONS, ...EXTRA_SHEET_COLLECTIONS].map((collectionName) => ({
+        properties: { title: SHEET_TITLES[collectionName] || collectionName },
+      })),
     }),
   });
 
@@ -164,7 +228,39 @@ async function updateSheetRange(spreadsheetId: string, range: string, values: an
   }
 }
 
-// Synchronize all seven system tables to the Google Sheet
+async function ensureSheetsExist(spreadsheetId: string, sheetTitles: string[], token: string) {
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties.title`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Failed to inspect spreadsheet sheets: ${errText}`);
+  }
+
+  const spreadsheet = await response.json();
+  const existingTitles = new Set((spreadsheet.sheets || []).map((sheet: any) => sheet.properties?.title));
+  const missingTitles = sheetTitles.filter((title) => !existingTitles.has(title));
+  if (missingTitles.length === 0) return;
+
+  const batchResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      requests: missingTitles.map((title) => ({ addSheet: { properties: { title } } })),
+    }),
+  });
+
+  if (!batchResponse.ok) {
+    const errText = await batchResponse.text();
+    throw new Error(`Failed to add missing sheets: ${errText}`);
+  }
+}
+
+// Synchronize all system tables to the Google Sheet
 export async function syncDatabaseToSheets(spreadsheetId: string, token: string): Promise<void> {
   // Pre-calculate/recalculate all custom analytical and GL collections before sync
   try {
@@ -172,6 +268,58 @@ export async function syncDatabaseToSheets(spreadsheetId: string, token: string)
   } catch (err) {
     console.error("Non-blocking error pre-calculating analytical collections:", err);
   }
+
+  const sheetCollections = [...CORE_SHEET_COLLECTIONS, ...EXTRA_SHEET_COLLECTIONS];
+  const sheetTitles = sheetCollections.map((collectionName) => SHEET_TITLES[collectionName] || collectionName);
+  await ensureSheetsExist(spreadsheetId, sheetTitles, token);
+
+  const clearingItemsSnapForDerived = await getDocs(collection(db, "clearingItems"));
+  const clearingItemsForDerived = clearingItemsSnapForDerived.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+  const derivedRecords: Record<string, any[]> = {
+    clearingItemLines: derivedClearingItemLines(clearingItemsForDerived),
+    projectSplits: derivedProjectSplits(clearingItemsForDerived),
+    syncLog: [
+      {
+        syncId: `sync-${Date.now()}`,
+        syncedAt: new Date().toISOString(),
+        collectionCount: sheetCollections.length,
+        status: "SUCCESS",
+      },
+    ],
+  };
+
+  for (const collectionName of sheetCollections) {
+    const schema = COLLECTION_SCHEMAS.find((item) => item.collection === collectionName);
+    const title = SHEET_TITLES[collectionName] || collectionName;
+    let records = derivedRecords[collectionName];
+    if (!records) {
+      const snap = await getDocs(collection(db, collectionName));
+      records = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+    }
+
+    const rows = schema
+      ? rowsFromSchema(schema, records)
+      : [["syncId", "syncedAt", "collectionCount", "status"], ...records.map((record) => [record.syncId || "", record.syncedAt || "", record.collectionCount || 0, record.status || ""])];
+
+    await clearSheetRange(spreadsheetId, `${escapeSheetTitle(title)}!A1:AZ10000`, token);
+    await updateSheetRange(spreadsheetId, `${escapeSheetTitle(title)}!A1`, rows, token);
+  }
+
+  const syncSettingsRef = doc(db, "settings", "global");
+  const syncSettingsSnap = await getDoc(syncSettingsRef);
+  if (syncSettingsSnap.exists()) {
+    const data = syncSettingsSnap.data();
+    const currentWorkspace = data.googleWorkspace || {};
+    await updateDoc(syncSettingsRef, {
+      googleWorkspace: {
+        ...currentWorkspace,
+        lastSyncedAt: new Date().toLocaleString("th-TH"),
+        syncedSheets: sheetTitles,
+      },
+    });
+  }
+
+  return;
 
   // 1. Fetch data from Firestore
   const advancesSnap = await getDocs(collection(db, "advances"));

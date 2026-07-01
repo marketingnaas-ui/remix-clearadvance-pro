@@ -232,18 +232,85 @@ export interface ClearingItem {
   [key: string]: any;
 }
 
+export interface ClearingItemLine {
+  id: string;
+  lineId: string;
+  itemId: string;
+  advId: string;
+  clearingLogId: string;
+  itemName: string;
+  qty: number;
+  unitPrice: number;
+  amount: number;
+}
+
+export interface ProjectSplit {
+  id: string;
+  splitId: string;
+  itemId: string;
+  advId: string;
+  projectId: string;
+  projectName: string;
+  amount: number;
+  percent: number;
+}
+
 export interface VaultFile {
   id: string;
+  fileId?: string;
   advId: string;
   fileType: "REQUEST" | "SLIP" | "RECEIPT" | "SETTLEMENT" | "LOG";
   fileUrl: string;
   fileName: string;
   uploadedBy: string;
   uploadedAt: string;
+  driveFolderId?: string;
+  driveFolderUrl?: string;
+  driveFileId?: string;
+  driveFileUrl?: string;
+  mimeType?: string;
+  fileSize?: number;
+  fileHash?: string;
+  ocrStatus?: "PENDING" | "PROCESSING" | "SUCCESS" | "FAILED" | "SKIPPED";
+}
+
+export interface DocumentTracking {
+  id: string;
+  trackingId: string;
+  documentNo: string;
+  documentType: "ADVANCE_REQUEST" | "CLEARING" | "RECEIPT" | "TAX_INVOICE" | "OTHER";
+  employeeName: string;
+  projectName: string;
+  amount: number;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  originalRequired?: boolean;
+  originalReceived?: boolean;
+  receivedAt?: string;
+  receivedBy?: string;
+  documentCompleteness?: "COMPLETE" | "PARTIAL" | "MISSING" | "NOT_REQUIRED";
+  note?: string;
+}
+
+export interface GeneralLedgerEntry {
+  id: string;
+  docNo: string;
+  date: string;
+  accountCode: string;
+  accountName: string;
+  category: string;
+  description: string;
+  debit: number;
+  credit: number;
+  employeeName: string;
+  projectId: string;
+  projectName: string;
 }
 
 export interface AuditLog {
   id: string;
+  auditId?: string;
   advId: string;
   actionType: ActionType;
   actionBy: string;
@@ -253,6 +320,38 @@ export interface AuditLog {
   afterStatus: string;
   note: string;
   relatedFileUrl?: string;
+}
+
+export interface DashboardCache {
+  id: string;
+  cacheId: string;
+  periodType: "DAY" | "WEEK" | "MONTH" | "QUARTER" | "YEAR";
+  dateStart: string;
+  dateEnd: string;
+  company: string;
+  outstandingAmount: number;
+  waitingApprovalCount: number;
+  waitingTransferCount: number;
+  waitingClearanceCount: number;
+  accountingReviewCount: number;
+  closedCount: number;
+  clearanceRate: number;
+  topProjects: any[];
+  topEmployees: any[];
+  topSuppliers: any[];
+  updatedAt: string;
+}
+
+export interface ExecutiveAIAnswer {
+  id: string;
+  questionId: string;
+  category: string;
+  question: string;
+  answer: string;
+  dateStart: string;
+  dateEnd: string;
+  company: string;
+  generatedAt: string;
 }
 
 export interface ApprovalFlowRule {
