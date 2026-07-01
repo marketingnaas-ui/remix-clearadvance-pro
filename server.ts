@@ -302,13 +302,21 @@ const enrichLineVariables = async (inputVariables: Record<string, any>, lineConf
   let closedTotal = 0;
   let waitingApprovalCount = 0;
   let waitingClearanceCount = 0;
+  const employeeOutstanding = new Map<string, { employeeId: string; employeeName: string; amount: number; count: number }>();
   advSnap.forEach((docSnap: any) => {
     const adv = docSnap.data();
     const amount = Number(adv.amount || adv.totalAmount || adv.advanceAmount || 0);
+    const outstandingAmount = Number(adv.outstandingAmount ?? amount);
     const status = String(adv.status || "").toLowerCase();
     totalAdvance += amount;
     if (["approved", "transferred", "pending_clearance", "waiting_clearance", "clearing"].some((s) => status.includes(s))) {
-      outstandingTotal += Number(adv.outstandingAmount ?? amount);
+      outstandingTotal += outstandingAmount;
+      const employeeId = String(adv.employeeId || adv.requesterId || adv.userId || "unknown");
+      const employeeName = String(adv.employeeName || adv.requesterName || employeeId || "ไม่ระบุพนักงาน");
+      const current = employeeOutstanding.get(employeeId) || { employeeId, employeeName, amount: 0, count: 0 };
+      current.amount += outstandingAmount;
+      current.count += 1;
+      employeeOutstanding.set(employeeId, current);
     }
     if (["closed", "settled", "completed"].some((s) => status.includes(s))) closedTotal += amount;
     if (["pending", "submitted", "approval"].some((s) => status.includes(s)) && !status.includes("approved")) waitingApprovalCount += 1;
@@ -330,6 +338,15 @@ const enrichLineVariables = async (inputVariables: Record<string, any>, lineConf
   variables.neededDate = variables.neededDate || "-";
   variables.dateRange = variables.dateRange || formatThaiDate();
   variables.outstandingAmount = variables.outstandingAmount || formatMoney(outstandingTotal);
+  const outstandingRows = Array.from(employeeOutstanding.values()).sort((a, b) => b.amount - a.amount);
+  variables.outstandingByEmployee = variables.outstandingByEmployee || (outstandingRows.length
+    ? outstandingRows.map((row) => `${row.employeeName}: ${formatMoney(row.amount)} (${row.count} รายการ)`).join("\n")
+    : "ไม่มีรายการคงค้าง");
+  variables.topOutstandingEmployees = variables.topOutstandingEmployees || (outstandingRows.length
+    ? outstandingRows.slice(0, 5).map((row, index) => `${index + 1}. ${row.employeeName} ${formatMoney(row.amount)}`).join("\n")
+    : "ไม่มีรายการคงค้าง");
+  const requesterOutstanding = outstandingRows.find((row) => row.employeeId === String(variables.employeeId || variables.targetEmployeeId || ""));
+  variables.requesterOutstandingAmount = variables.requesterOutstandingAmount || formatMoney(requesterOutstanding?.amount || 0);
   variables.waitingApprovalCount = variables.waitingApprovalCount ?? String(waitingApprovalCount);
   variables.waitingClearanceCount = variables.waitingClearanceCount ?? String(waitingClearanceCount);
   variables.dailySummary = variables.dailySummary || `วันนี้มีรายการรออนุมัติ ${waitingApprovalCount} รายการ และรอเคลียร์ ${waitingClearanceCount} รายการ`;

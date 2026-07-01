@@ -113,6 +113,9 @@ const LINE_VARIABLES = [
   { name: "{liffSlipUrl}", desc: "ลิงก์ LIFF สำหรับแนบสลิป" },
   { name: "{profileImageUrl}", desc: "รูปโปรไฟล์ผู้ขอเบิก" },
   { name: "{outstandingAmount}", desc: "ยอดคงค้างรวม" },
+  { name: "{outstandingByEmployee}", desc: "สรุปยอดคงค้างรายคน" },
+  { name: "{topOutstandingEmployees}", desc: "พนักงานที่มียอดคงค้างสูงสุด" },
+  { name: "{requesterOutstandingAmount}", desc: "ยอดคงค้างของผู้ขอเบิกรายนี้" },
   { name: "{waitingApprovalCount}", desc: "จำนวนรายการรออนุมัติ" },
   { name: "{waitingClearanceCount}", desc: "จำนวนรายการรอเคลียร์" },
   { name: "{dailySummary}", desc: "สรุปรายงานประจำวัน" },
@@ -422,6 +425,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   const [lineChannelAccessToken, setLineChannelAccessToken] = useState("");
   const [lineChannelSecret, setLineChannelSecret] = useState("");
   const [lineLiffId, setLineLiffId] = useState("");
+  const [lineGroupId, setLineGroupId] = useState("");
   const [lineTriggers, setLineTriggers] = useState<LineMessageTrigger[]>(buildSystemLineTriggers());
   const [previewTriggerId, setPreviewTriggerId] = useState<string>("onNewRequest");
   const [newLineTriggerName, setNewLineTriggerName] = useState("");
@@ -624,6 +628,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
           setLineChannelAccessToken(data.lineMessagingConfig.channelAccessToken || "");
           setLineChannelSecret(data.lineMessagingConfig.channelSecret || "");
           setLineLiffId(data.lineMessagingConfig.liffId || "");
+          setLineGroupId(data.lineMessagingConfig.groupId || data.lineMessagingConfig.lineGroupId || "");
           if (data.lineMessagingConfig.triggers) {
             setLineTriggers(data.lineMessagingConfig.triggers);
           }
@@ -1051,6 +1056,8 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
           channelAccessToken: lineChannelAccessToken,
           channelSecret: lineChannelSecret,
           liffId: lineLiffId,
+          groupId: lineGroupId.trim(),
+          lineGroupId: lineGroupId.trim(),
           triggers: lineTriggers
         }
       }, { merge: true });
@@ -5370,6 +5377,19 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                       onChange={(e) => setLineLiffId(e.target.value)}
                       className="w-full max-w-md px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
                    />
+                 </div>
+                 <div className="space-y-2">
+                   <label className="text-xs font-bold text-stone-700 block">LINE Group ID / Room ID</label>
+                   <input
+                      type="text"
+                      placeholder="เช่น Cxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                      value={lineGroupId}
+                      onChange={(e) => setLineGroupId(e.target.value)}
+                      className="w-full max-w-md px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
+                   />
+                   <p className="text-[10px] text-stone-500">
+                     ใช้สำหรับส่งแจ้งเตือนเข้ากลุ่ม LINE กลางเพิ่มเติมจากผู้รับตามบทบาท
+                   </p>
                  </div>
                </div>
                

@@ -27,6 +27,7 @@ type ReportKey =
   | "project_cost"
   | "original_doc"
   | "vendor"
+  | "employee_outstanding"
   | "executive";
 
 type GenericRecord = Record<string, any>;
@@ -80,6 +81,7 @@ const REPORTS: { key: ReportKey; label: string }[] = [
   { key: "project_cost", label: "ต้นทุนโครงการ" },
   { key: "original_doc", label: "ติดตามเอกสารต้นฉบับ" },
   { key: "vendor", label: "Vendor / เจ้าหนี้" },
+  { key: "employee_outstanding", label: "ยอดคงค้างรายคน" },
   { key: "executive", label: "สรุปผู้บริหาร" },
 ];
 
@@ -138,6 +140,7 @@ export default function AccountingReports() {
   const [clearingItems, setClearingItems] = useState<ClearingItem[]>([]);
   const [clearingLogs, setClearingLogs] = useState<ClearingLog[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [projectRecords, setProjectRecords] = useState<GenericRecord[]>([]);
   const [glEntries, setGlEntries] = useState<GenericRecord[]>([]);
   const [projectCosts, setProjectCosts] = useState<GenericRecord[]>([]);
   const [documentTracking, setDocumentTracking] = useState<GenericRecord[]>([]);
@@ -150,6 +153,7 @@ export default function AccountingReports() {
     clearingItems: true,
     clearingLogs: true,
     employees: true,
+    projects: true,
     GL: true,
     project_costs: true,
     document_tracking: true,
@@ -195,6 +199,7 @@ export default function AccountingReports() {
       subscribe<ClearingItem>("clearingItems", setClearingItems),
       subscribe<ClearingLog>("clearingLogs", setClearingLogs),
       subscribe<Employee>("employees", setEmployees),
+      subscribe<GenericRecord>("projects", setProjectRecords),
       subscribe<GenericRecord>("GL", setGlEntries),
       subscribe<GenericRecord>("project_costs", setProjectCosts),
       subscribe<GenericRecord>("document_tracking", setDocumentTracking),
@@ -247,6 +252,7 @@ export default function AccountingReports() {
 
     advances.forEach((adv) => {
       if (adv.projectId) projects.add(adv.projectId);
+      if (adv.projectName) projects.add(adv.projectName);
       if (adv.status) statuses.add(adv.status);
       if (adv.employeeName) requesters.add(adv.employeeName);
     });
@@ -258,6 +264,11 @@ export default function AccountingReports() {
       if (item.documentType) docTypes.add(item.documentType);
     });
     (settings.projects || []).forEach((project: string) => projects.add(project));
+    projectRecords.forEach((project) => {
+      if (project.projectId) projects.add(project.projectId);
+      if (project.projectName) projects.add(project.projectName);
+      if (project.projectCode) projects.add(project.projectCode);
+    });
 
     return {
       projects: Array.from(projects).sort(),
@@ -266,7 +277,7 @@ export default function AccountingReports() {
       vendors: Array.from(vendors).sort(),
       documentTypes: Array.from(docTypes).sort(),
     };
-  }, [advances, enrichedItems, settings.projects]);
+  }, [advances, enrichedItems, projectRecords, settings.projects]);
 
   const filterByCommonFields = (row: GenericRecord) => {
     const date = asDate(row.date || row.documentDate || row.createdAt || row.requestDate);
@@ -336,30 +347,37 @@ export default function AccountingReports() {
   }, [advances, enrichedItems, glEntries]);
 
   const projectCostRows = useMemo(() => {
-    if (projectCosts.length > 0) return projectCosts;
+    if (projectRecords.length === 0 && projectCosts.length > 0) return projectCosts;
     const projectDetails = settings.projectDetails || {};
     const projectBudgets = settings.projectBudgets || {};
-    const projects = new Set([...options.projects, ...Object.keys(projectDetails), ...Object.keys(projectBudgets)]);
-    return Array.from(projects).map((projectName) => {
-      const projectAdvances = advances.filter((adv) => adv.projectId === projectName);
+    const projectSource = projectRecords.length > 0
+      ? projectRecords
+      : Array.from(new Set([...options.projects, ...Object.keys(projectDetails), ...Object.keys(projectBudgets)])).map((projectName) => ({ id: projectName, projectId: projectName, projectName }));
+
+    return projectSource.map((project) => {
+      const projectId = project.projectId || project.projectCode || project.id || project.projectName;
+      const projectName = project.projectName || projectId;
+      const projectAdvances = advances.filter((adv) => [projectId, projectName, project.projectCode].filter(Boolean).includes(adv.projectId || adv.projectName));
       const approvedClearing = projectAdvances.reduce((sum, adv) => sum + Number(adv.approvedClearingAmountTotal || 0), 0);
       const requested = projectAdvances.reduce((sum, adv) => sum + Number(adv.requestAmount || 0), 0);
-      const contractBudget = Number(projectDetails[projectName]?.contractBudget || projectBudgets[projectName] || 0);
-      const pettyCashBudget = Number(projectDetails[projectName]?.pettyCashBudget || 0);
+      const outstandingAmount = projectAdvances.reduce((sum, adv) => sum + Number(adv.outstandingAmount || 0), 0);
+      const contractBudget = Number(project.contractAmount || project.budget || projectDetails[projectId]?.contractBudget || projectBudgets[projectId] || 0);
+      const pettyCashBudget = Number(project.pettyCashBudget || projectDetails[projectId]?.pettyCashBudget || project.budget || 0);
       return {
-        id: projectName,
+        id: project.id || projectId,
         projectName,
-        projectId: projectName,
+        projectId,
         contractBudget,
         pettyCashBudget,
         totalAdvanceRequested: requested,
         totalClearingApproved: approvedClearing,
+        outstandingAmount,
         remainingPettyCashBudget: pettyCashBudget - approvedClearing,
         variance: contractBudget - approvedClearing,
         lastUpdated: new Date().toISOString(),
       };
     });
-  }, [advances, options.projects, projectCosts, settings.projectBudgets, settings.projectDetails]);
+  }, [advances, options.projects, projectCosts, projectRecords, settings.projectBudgets, settings.projectDetails]);
 
   const reportDefinition = useMemo<ReportDefinition>(() => {
     const commonSummary = {
@@ -595,6 +613,65 @@ export default function AccountingReports() {
           { key: "whtText", label: "WHT", align: "right" },
         ],
         summary: [commonSummary.totalRows(rows), commonSummary.totalAmount("รวมเจ้าหนี้/ค่าใช้จ่าย", rows, "netAmount")],
+      };
+    }
+
+    if (activeReport === "employee_outstanding") {
+      const employeeMap = new Map<string, GenericRecord>();
+      advances.filter((adv) => filterByCommonFields({ ...adv, date: adv.createdAt, requesterName: adv.employeeName })).forEach((adv) => {
+        const key = adv.employeeId || adv.employeeName || "unknown";
+        const current = employeeMap.get(key) || {
+          employeeId: adv.employeeId || key,
+          employeeName: adv.employeeName || "ไม่ระบุพนักงาน",
+          advanceCount: 0,
+          outstandingCount: 0,
+          requestAmount: 0,
+          outstandingAmount: 0,
+          latestAdvId: "",
+          latestDate: "",
+        };
+        current.advanceCount += 1;
+        current.requestAmount += Number(adv.requestAmount || 0);
+        const outstanding = Number(adv.outstandingAmount || 0);
+        current.outstandingAmount += outstanding;
+        if (outstanding > 0) current.outstandingCount += 1;
+        const advDate = asDate(adv.createdAt);
+        if (!current.latestDate || advDate > current.latestDate) {
+          current.latestDate = advDate;
+          current.latestAdvId = adv.advId;
+        }
+        employeeMap.set(key, current);
+      });
+
+      const rows = Array.from(employeeMap.values())
+        .sort((a, b) => Number(b.outstandingAmount || 0) - Number(a.outstandingAmount || 0))
+        .map((row) => ({
+          ...row,
+          requestAmountText: money(row.requestAmount),
+          outstandingAmountText: money(row.outstandingAmount),
+          latestDateText: thaiDate(row.latestDate),
+        }));
+
+      return {
+        key: "employee_outstanding",
+        title: "รายงานยอดคงค้างรายคน",
+        description: "สรุปยอดคงค้างของพนักงานแต่ละคนจาก advances.outstandingAmount สำหรับใช้ติดตามและทำตัวแปร Flex Message",
+        rows,
+        columns: [
+          { key: "employeeId", label: "รหัสพนักงาน" },
+          { key: "employeeName", label: "พนักงาน" },
+          { key: "advanceCount", label: "จำนวน ADV", align: "right" },
+          { key: "outstandingCount", label: "รายการคงค้าง", align: "right" },
+          { key: "requestAmountText", label: "ยอดเบิกรวม", align: "right" },
+          { key: "outstandingAmountText", label: "ยอดคงค้าง", align: "right" },
+          { key: "latestAdvId", label: "ADV ล่าสุด" },
+          { key: "latestDateText", label: "วันที่ล่าสุด" },
+        ],
+        summary: [
+          commonSummary.totalRows(rows),
+          commonSummary.totalAmount("รวมยอดเบิก", rows, "requestAmount"),
+          commonSummary.totalAmount("รวมยอดคงค้าง", rows, "outstandingAmount"),
+        ],
       };
     }
 

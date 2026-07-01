@@ -236,13 +236,16 @@ export default function ProjectManagement() {
               onSubmit={async (e) => {
                 e.preventDefault();
                 const formData = new FormData(e.currentTarget);
+                const projectId = String(formData.get("projectId") || formData.get("projectCode") || editingProject?.projectId || editingProject?.id || "").trim();
                 const data: Partial<Project> = {
+                  projectId,
                   projectCode: formData.get("projectCode") as string,
                   projectName: formData.get("projectName") as string,
                   companyName: formData.get("companyName") as string,
                   clientName: formData.get("clientName") as string,
                   pmName: formData.get("pmName") as string,
                   pmId: formData.get("pmId") as string,
+                  contractAmount: Number(formData.get("contractAmount")) || 0,
                   budget: Number(formData.get("budget")),
                   pettyCashBudget: Number(formData.get("pettyCashBudget")),
                   location: formData.get("location") as string,
@@ -256,7 +259,7 @@ export default function ProjectManagement() {
                   if (editingProject) {
                     await updateDoc(doc(db, "projects", editingProject.id), data);
                   } else {
-                    const newId = doc(collection(db, "projects")).id;
+                    const newId = projectId || doc(collection(db, "projects")).id;
                     await setDoc(doc(db, "projects", newId), {
                       ...data,
                       id: newId,
@@ -271,6 +274,10 @@ export default function ProjectManagement() {
               }}
             >
               <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-stone-500 uppercase">Project ID</label>
+                  <input name="projectId" defaultValue={editingProject?.projectId || editingProject?.id || editingProject?.projectCode} className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-bold" required />
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-stone-500 uppercase">รหัสโครงการ</label>
@@ -289,6 +296,11 @@ export default function ProjectManagement() {
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-stone-500 uppercase">ชื่อโครงการ</label>
                   <input name="projectName" defaultValue={editingProject?.projectName} className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-bold" required />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-stone-500 uppercase">มูลค่าสัญญา</label>
+                  <input name="contractAmount" type="number" defaultValue={editingProject?.contractAmount || editingProject?.budget || 0} className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-bold" />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
