@@ -21,6 +21,7 @@ import OriginalDocTracking from "./components/OriginalDocTracking";
 import CloseAccount from "./components/CloseAccount";
 import AccountingReports from "./components/AccountingReports";
 import ProfileSettings from "./components/ProfileSettings";
+import UploadSlipLiff from "./components/UploadSlipLiff";
 import { Employee, UserRole } from "./types";
 import { LogOut, LayoutDashboard, Send, CheckSquare, Receipt, HardDrive, History, FileCheck2, User, ChevronRight, Settings, Plus, X as CloseIcon, BarChart3, TrendingUp, FileCheck, Lock, BookOpen } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -93,6 +94,12 @@ export default function App() {
     setCurrentEmployee(null);
     setActiveTab("dashboard");
   };
+
+  const isUploadSlipRoute = window.location.pathname.includes("/liff/upload-slip") || window.location.search.includes("adv_id=");
+
+  if (isUploadSlipRoute) {
+    return <UploadSlipLiff />;
+  }
 
   if (!currentEmployee) {
     return (

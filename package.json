@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
+    "@line/liff": "^2.29.1",
     "@tailwindcss/vite": "^4.1.14",
     "@types/multer": "^2.1.0",
     "@types/react-signature-canvas": "^1.0.7",

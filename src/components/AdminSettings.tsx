@@ -66,6 +66,12 @@ import {
   CheckSquare
 } from "lucide-react";
 import AILoadingModal from "./AILoadingModal";
+import EmployeeManagement from "./master-data/EmployeeManagement";
+import ProjectManagement from "./master-data/ProjectManagement";
+import ProjectCostSummary from "./master-data/ProjectCostSummary";
+import AdvanceManagement from "./master-data/AdvanceManagement";
+import ClearingHistory from "./master-data/ClearingHistory";
+import ExpenseItems from "./master-data/ExpenseItems";
 
 interface AdminSettingsProps {
   currentEmployee: Employee;
@@ -106,8 +112,25 @@ const DEFAULT_LINE_TRIGGERS: LineMessageTrigger[] = [
   { id: "onSettlement", name: "เมื่อบัญชีปิดยอด Settlement", isActive: true, messageTemplate: "รายการ {advId} ปิดยอดเรียบร้อยแล้ว\nโอนเงินสำเร็จ", type: "text" }
 ];
 
+type AdminSubTab =
+  | "users"
+  | "projects"
+  | "categories"
+  | "master_data"
+  | "ai_bot"
+  | "ai_ocr"
+  | "document_numbers"
+  | "approval_workflow"
+  | "workspace"
+  | "doc_templates"
+  | "line_notifications"
+  | "advance_data"
+  | "system_usage"
+  | "data_import";
+
 export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
-  const [activeSubTab, setActiveSubTab] = useState<"users" | "projects" | "categories" | "ai_bot" | "ai_ocr" | "document_numbers" | "approval_workflow" | "workspace" | "doc_templates" | "line_notifications" | "advance_data" | "system_usage">("users");
+  const [activeSubTab, setActiveSubTab] = useState<AdminSubTab>("users");
+  const [activeMasterDataTab, setActiveMasterDataTab] = useState<"employees" | "projects" | "project_costs" | "advances" | "clearing" | "expenses">("employees");
   const [workspaceSettings, setWorkspaceSettings] = useState<GoogleWorkspaceSettings>({});
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [syncingSheets, setSyncingSheets] = useState(false);
@@ -2252,6 +2275,21 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
         </button>
         <button
           onClick={() => {
+            setActiveSubTab("master_data");
+            setError(null);
+            setSuccess(null);
+          }}
+          className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all ${
+            activeSubTab === "master_data"
+              ? "bg-stone-950 text-stone-50 shadow-sm"
+              : "text-stone-600 hover:bg-stone-100"
+          }`}
+        >
+          <Database className="w-4 h-4" />
+          ศูนย์ข้อมูลหลัก
+        </button>
+        <button
+          onClick={() => {
             setActiveSubTab("ai_bot");
             setError(null);
             setSuccess(null);
@@ -2426,6 +2464,48 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
           </div>
         ) : (
           <>
+            {activeSubTab === "master_data" && (
+              <div className="space-y-5">
+                <div className="flex flex-col gap-1">
+                  <h3 className="text-sm font-bold text-stone-900">ศูนย์ข้อมูลหลัก</h3>
+                  <p className="text-xs text-stone-500">
+                    จัดการข้อมูลจริงใน Firestore สำหรับพนักงาน โครงการ งบประมาณ ADV ประวัติ Clearing และรายการค่าใช้จ่าย
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2 bg-stone-100 border border-stone-200 rounded-2xl p-2">
+                  {[
+                    { id: "employees", label: "พนักงาน" },
+                    { id: "projects", label: "โครงการ" },
+                    { id: "project_costs", label: "งบโครงการ" },
+                    { id: "advances", label: "ADV" },
+                    { id: "clearing", label: "Clearing" },
+                    { id: "expenses", label: "ค่าใช้จ่าย" },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setActiveMasterDataTab(tab.id as typeof activeMasterDataTab)}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition ${
+                        activeMasterDataTab === tab.id
+                          ? "bg-white text-stone-950 shadow-sm"
+                          : "text-stone-600 hover:bg-white/60"
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                {activeMasterDataTab === "employees" && <EmployeeManagement />}
+                {activeMasterDataTab === "projects" && <ProjectManagement />}
+                {activeMasterDataTab === "project_costs" && <ProjectCostSummary />}
+                {activeMasterDataTab === "advances" && <AdvanceManagement />}
+                {activeMasterDataTab === "clearing" && <ClearingHistory />}
+                {activeMasterDataTab === "expenses" && <ExpenseItems />}
+              </div>
+            )}
+
             {/* SUB TAB: User Management */}
             {activeSubTab === "users" && (
               <div className="space-y-6">

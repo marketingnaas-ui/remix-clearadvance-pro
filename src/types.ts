@@ -61,16 +61,22 @@ export interface AIUsageLog {
 
 export interface Employee {
   id: string; // Document ID (UID after registered, or temp ID before)
+  employeeId?: string;
   uid?: string; // Firebase Auth UID linked
   username?: string; // unique alphanumeric registration name
   employeeCode?: string; // dynamic formatted code from settings (e.g. EMP-0004)
   name: string;
   nickname?: string; // Employee nickname
+  email?: string;
+  phone?: string;
   role: UserRole;
   pinHash: string; // SHA-256 hashed PIN
   lineUserId?: string;
   lineDisplayName?: string;
   linePictureUrl?: string;
+  department?: string;
+  position?: string;
+  company?: string;
   bankName: string;
   bankNo: string;
   bankAccountName: string;
@@ -84,6 +90,53 @@ export interface Employee {
   status?: "Active" | "Disabled" | "Suspended";
   isApprovedByAdmin?: boolean;
   plainPin?: string; // Plain-text PIN for Admin visibility/reset
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: any;
+}
+
+export interface Project {
+  id: string;
+  projectId?: string;
+  projectCode: string;
+  projectName: string;
+  companyName: string;
+  clientName: string;
+  pmId: string;
+  pmName: string;
+  contractAmount: number;
+  budget: number;
+  pettyCashBudget: number;
+  location: string;
+  startDate: string;
+  endDate: string;
+  status: "Active" | "Completed" | "Suspended";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectCost {
+  id: string;
+  projectId: string;
+  projectName: string;
+  contractBudget: number;
+  pettyCashBudget: number;
+  remainingPettyCashBudget: number;
+  totalAdvanceRequested: number;
+  totalAdvanceApproved: number;
+  totalClearingSubmitted: number;
+  totalClearingApproved: number;
+  outstandingAmount: number;
+  waitingApprovalAmount: number;
+  waitingTransferAmount: number;
+  waitingClearanceAmount: number;
+  overdueAmount: number;
+  overdueCount: number;
+  clearanceRate: number;
+  advanceExposure: number;
+  riskScore: number;
+  variance: number;
+  lastUpdatedAt: string;
 }
 
 export interface Advance {
@@ -92,8 +145,10 @@ export interface Advance {
   employeeId: string;
   employeeName: string;
   projectId: string;
+  projectName?: string;
   category: string;
   requestAmount: number;
+  approvedAmount?: number;
   approvedClearingAmountTotal: number;
   outstandingAmount: number;
   status: AdvanceStatus;
@@ -109,6 +164,8 @@ export interface Advance {
   note?: string;
   attachmentUrl?: string;
   returnedReason?: string;
+  updatedAt?: string;
+  [key: string]: any;
 }
 
 export interface ClearingLog {
@@ -123,6 +180,9 @@ export interface ClearingLog {
   clearingNo?: string;
   accountantNote?: string;
   returnedReason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: any;
 }
 
 export interface ClearingItem {
@@ -138,6 +198,7 @@ export interface ClearingItem {
   itemName: string;
   qty: number;
   unitPrice: number;
+  amount?: number;
   lineItems?: {
     itemName: string;
     qty: number;
@@ -166,7 +227,9 @@ export interface ClearingItem {
   originalDocReceivedBy?: string;
   rawOcrJson?: string; // Raw OCR JSON response from Gemini
   createdAt?: string;
+  updatedAt?: string;
   status?: AdvanceStatus;
+  [key: string]: any;
 }
 
 export interface VaultFile {
@@ -233,4 +296,3 @@ export interface SystemSettings {
   approvalFlowRules?: ApprovalFlowRule[];
   documentTemplates?: DocumentTemplateConfig;
 }
-
