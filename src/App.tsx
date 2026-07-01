@@ -181,17 +181,13 @@ export default function App() {
               </button>
 
               <div className="hidden md:flex items-center gap-2.5">
-                {(currentEmployee.profilePhotoURL || currentEmployee.profileImage) ? (
-                  <img
-                    src={currentEmployee.profilePhotoURL ? `${currentEmployee.profilePhotoURL}${currentEmployee.profilePhotoURL.includes('?') ? '&' : '?'}v=${currentEmployee.profilePhotoUpdatedAt?.seconds || ''}` : currentEmployee.profileImage}
-                    alt="profile"
-                    className="w-8 h-8 rounded-full object-cover border border-stone-200"
-                  />
-                ) : (
-                  <div className="w-8 h-8 rounded-full bg-stone-900 text-stone-50 flex items-center justify-center text-xs font-bold font-mono">
-                    {currentEmployee.name.charAt(0)}
-                  </div>
-                )}
+                <ProfileImage
+                  photoURL={currentEmployee.profilePhotoURL}
+                  image={currentEmployee.profileImage}
+                  name={currentEmployee.name}
+                  updatedAt={currentEmployee.profilePhotoUpdatedAt}
+                  className="w-8 h-8 rounded-full object-cover border border-stone-200"
+                />
                 <div className="flex flex-col items-start text-left">
                   <span className="font-bold text-xs text-stone-900 leading-tight">
                     {currentEmployee.nickname || currentEmployee.name}
@@ -693,17 +689,13 @@ export default function App() {
                 <div className="px-5 pb-6 overflow-y-auto flex-1">
                   {/* Profile Section inside Bottom Sheet */}
                   <div className="flex items-center gap-3.5 p-3.5 bg-stone-50 border border-stone-200/60 rounded-2xl mb-4">
-                    {(currentEmployee.profilePhotoURL || currentEmployee.profileImage) ? (
-                      <img
-                        src={currentEmployee.profilePhotoURL ? `${currentEmployee.profilePhotoURL}${currentEmployee.profilePhotoURL.includes('?') ? '&' : '?'}v=${currentEmployee.profilePhotoUpdatedAt?.seconds || ''}` : currentEmployee.profileImage}
-                        alt="profile"
-                        className="w-11 h-11 rounded-full object-cover border border-stone-200 shadow-sm"
-                      />
-                    ) : (
-                      <div className="w-11 h-11 bg-stone-950 text-stone-50 rounded-xl flex items-center justify-center font-bold shadow-sm text-base">
-                        {currentEmployee.name.charAt(0)}
-                      </div>
-                    )}
+                    <ProfileImage
+                      photoURL={currentEmployee.profilePhotoURL}
+                      image={currentEmployee.profileImage}
+                      name={currentEmployee.name}
+                      updatedAt={currentEmployee.profilePhotoUpdatedAt}
+                      className="w-11 h-11 rounded-full object-cover border border-stone-200 shadow-sm"
+                    />
                     <div>
                       <h4 className="font-bold text-stone-900 text-sm">{currentEmployee.nickname || currentEmployee.name}</h4>
                       <p className="text-[10px] text-stone-500 font-mono font-bold uppercase tracking-wider">{currentEmployee.role}</p>

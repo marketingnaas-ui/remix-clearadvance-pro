@@ -627,6 +627,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                               
                               const result = await response.json();
                               if (result.status === "success") {
+                                const persistedProfileImage = result.profileImage || fallbackDataUrl;
                                 setDashboardImage(result.downloadURL);
                                 setSuccessMessage("อัปเดตรูปภาพสำเร็จ");
                                 
@@ -635,6 +636,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                                   const employeeRef = doc(db, "employees", currentEmployee.id);
                                   await updateDoc(employeeRef, {
                                     profilePhotoURL: result.downloadURL,
+                                    profileImage: persistedProfileImage,
                                     profilePhotoUpdatedAt: serverTimestamp()
                                   });
                                 } catch (fsErr) {
@@ -645,6 +647,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                                   onProfileUpdate({
                                     ...currentEmployee,
                                     profilePhotoURL: result.downloadURL,
+                                    profileImage: persistedProfileImage,
                                     profilePhotoUpdatedAt: { seconds: Math.floor(Date.now() / 1000) }
                                   });
                                 }

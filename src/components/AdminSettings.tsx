@@ -2389,36 +2389,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
           <Users className="w-4 h-4" />
           จัดการผู้ใช้งาน & อนุมัติสิทธิ์ ({employees.length})
         </button>
-        <button
-          onClick={() => {
-            setActiveSubTab("projects");
-            setError(null);
-            setSuccess(null);
-          }}
-          className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all ${
-            activeSubTab === "projects"
-              ? "bg-stone-950 text-stone-50 shadow-sm"
-              : "text-stone-600 hover:bg-stone-100"
-          }`}
-        >
-          <FolderGit className="w-4 h-4" />
-          จัดการโครงการ (Cost Centers)
-        </button>
-        <button
-          onClick={() => {
-            setActiveSubTab("categories");
-            setError(null);
-            setSuccess(null);
-          }}
-          className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all ${
-            activeSubTab === "categories"
-              ? "bg-stone-950 text-stone-50 shadow-sm"
-              : "text-stone-600 hover:bg-stone-100"
-          }`}
-        >
-          <Tag className="w-4 h-4" />
-          หมวดหมู่ค่าใช้จ่าย
-        </button>
+
         <button
           onClick={() => {
             setActiveSubTab("master_data");
@@ -5313,35 +5284,6 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {/* SUB TAB: Document Templates */}
-      {activeSubTab === "doc_templates" && (
-        <div className="space-y-6">
-          <div className="flex justify-between items-center">
-            <div>
-              <h3 className="text-sm font-bold text-stone-900">หน้าตั้งค่าเทมเพลตเอกสาร (Document Page Templates)</h3>
-              <p className="text-xs text-stone-500">
-                จัดการรูปแบบหน้าตาเอกสารต่างๆ ในระบบ เช่น ใบเบิก ใบเสร็จ และสลิปการโอนเงิน (Coming Soon)
-              </p>
-            </div>
-          </div>
-          
-          <div className="bg-stone-50 border border-stone-200 rounded-xl p-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <HardDrive className="w-4 h-4 text-stone-500" />
-              <span className="text-xs font-semibold text-stone-700">พื้นที่เก็บไฟล์เทมเพลต:</span>
-              <span className="text-xs font-bold text-emerald-600">ไม่จำกัด (Unlimited)</span>
-            </div>
-            <div className="text-[10px] text-stone-500 font-medium">
-              จำนวนไฟล์ในระบบ: <span className="font-bold text-stone-900">0</span> ไฟล์
-            </div>
-          </div>
-
-          <div className="bg-white border border-stone-200 rounded-2xl p-6 shadow-xs text-center text-stone-500 text-sm italic">
-            ฟีเจอร์นี้อยู่ระหว่างการพัฒนา... สามารถระบุรูปแบบเทมเพลตและอัปโหลดไฟล์ HTML/PDF ในภายหลัง
-          </div>
         </div>
       )}
 

@@ -73,7 +73,7 @@ export default function ProfileSettings({ currentEmployee, onProfileUpdate }: Pr
         setBankAccountName(data.bankAccountName || "");
         setUsername(data.username || "");
         setLineUserId(data.lineUserId || "");
-        setProfileImage(data.profilePhotoURL || data.profileImage || "");
+        setProfileImage(data.profileImage || data.profilePhotoURL || "");
         // @ts-ignore
         setSignatureImage(data.signatureImage || "");
 
@@ -164,7 +164,21 @@ export default function ProfileSettings({ currentEmployee, onProfileUpdate }: Pr
               const result = await response.json();
               setSaving(false);
               if (result.status === "success") {
-                setProfileImage(result.downloadURL);
+                const persistedProfileImage = result.profileImage || fallbackDataUrl;
+                const fallbackUpdatedAt = { seconds: Math.floor(Date.now() / 1000) };
+                const employeeRef = doc(db, "employees", currentEmployee.id);
+                await updateDoc(employeeRef, {
+                  profilePhotoURL: result.downloadURL || "",
+                  profileImage: persistedProfileImage,
+                  profilePhotoUpdatedAt: fallbackUpdatedAt,
+                });
+                setProfileImage(persistedProfileImage);
+                onProfileUpdate({
+                  ...currentEmployee,
+                  profilePhotoURL: result.downloadURL || "",
+                  profileImage: persistedProfileImage,
+                  profilePhotoUpdatedAt: fallbackUpdatedAt,
+                });
                 setSuccess("อัปโหลดรูปภาพโปรไฟล์สำเร็จ");
               } else {
                 throw new Error(result.error);
@@ -301,7 +315,6 @@ export default function ProfileSettings({ currentEmployee, onProfileUpdate }: Pr
 
       if (profileImage.startsWith("http") || profileImage.startsWith("/api/profiles/")) {
         updateData.profilePhotoURL = profileImage;
-        updateData.profileImage = ""; // Clear legacy base64
       } else if (profileImage) {
         updateData.profileImage = profileImage;
       }

@@ -410,7 +410,7 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
 
       const clearanceDate = new Date();
       clearanceDate.setDate(clearanceDate.getDate() + 15);
-      const photoUrl = currentEmployee.profilePhotoURL || "https://img2.pic.in.th/A4BA5AC0-60F5-42EB-9FA6-B7B10EFC6F48.th.jpeg";
+      const photoUrl = currentEmployee.profilePhotoURL || currentEmployee.profileImage || "";
 
       await sendLineNotification({
         triggerId: "onNewRequest",

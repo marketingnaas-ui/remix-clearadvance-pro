@@ -102,6 +102,40 @@ const shortMoney = (value?: any) => {
   return amount.toLocaleString("th-TH");
 };
 
+const getPublicBaseUrl = () => {
+  const rawUrl = process.env.APP_URL || process.env.PUBLIC_APP_URL || process.env.VITE_APP_URL || process.env.VERCEL_URL || "http://localhost:3002";
+  const normalized = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
+  return normalized.replace(/\/$/, "");
+};
+
+const absolutizeUrl = (url?: string) => {
+  if (!url) return "";
+  if (url.startsWith("data:")) return "";
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  if (url.startsWith("/")) return `${getPublicBaseUrl()}${url}`;
+  return url;
+};
+
+const buildDbProfileImageUrl = (employeeId?: string, updatedAt?: any) => {
+  if (!employeeId) return "";
+  const version = typeof updatedAt?.toMillis === "function"
+    ? updatedAt.toMillis()
+    : updatedAt?.seconds || updatedAt || "";
+  const suffix = version ? `?v=${encodeURIComponent(String(version))}` : "";
+  return `${getPublicBaseUrl()}/api/profile-image/${encodeURIComponent(employeeId)}${suffix}`;
+};
+
+const resolveProfileImageUrl = (employee?: any, preferredUrl?: string) => {
+  const absolutePreferred = absolutizeUrl(preferredUrl);
+  if (absolutePreferred) return absolutePreferred;
+  const absolutePhotoUrl = absolutizeUrl(employee?.profilePhotoURL || employee?.photoURL || employee?.avatarUrl);
+  if (absolutePhotoUrl) return absolutePhotoUrl;
+  if (employee?.profileImage && (employee?.id || employee?.employeeId)) {
+    return buildDbProfileImageUrl(employee.id || employee.employeeId, employee.profilePhotoUpdatedAt || employee.updatedAt);
+  }
+  return "";
+};
+
 const getDocByIdOrField = async (collectionName: string, idOrValue?: string, fieldName?: string) => {
   if (!firestoreDb || !idOrValue) return null;
   const byId = await firestoreDb.collection(collectionName).doc(idOrValue).get();
@@ -186,13 +220,14 @@ const enrichLineVariables = async (inputVariables: Record<string, any>, lineConf
     variables.amount = variables.amount || advance.amount || advance.totalAmount || advance.advanceAmount;
     variables.date = variables.date || formatThaiDate(advance.createdAt || advance.requestDate || advance.date);
     variables.neededDate = variables.neededDate || formatThaiDate(advance.neededDate || advance.dueDate || advance.clearanceDueDate);
-    variables.profileImageUrl = variables.profileImageUrl || advance.profileImageUrl || advance.profilePhotoURL;
+    variables.profileImageUrl = resolveProfileImageUrl(null, variables.profileImageUrl || advance.profileImageUrl || advance.profilePhotoURL);
   }
 
   const employee: any = await getDocByIdOrField("employees", variables.employeeId || variables.targetEmployeeId, "employeeId");
   if (employee) {
     variables.employeeName = variables.employeeName || employee.name || employee.fullName || `${employee.firstName || ""} ${employee.lastName || ""}`.trim();
-    variables.profileImageUrl = variables.profileImageUrl || employee.profilePhotoURL || employee.photoURL || employee.avatarUrl;
+    variables.employeeId = variables.employeeId || employee.id || employee.employeeId;
+    variables.profileImageUrl = resolveProfileImageUrl(employee, variables.profileImageUrl);
     variables.bankAccountNo = variables.bankAccountNo || employee.bankNo || employee.bankAccountNo || employee.bankAccountNumber || employee.accountNumber;
     variables.bankName = variables.bankName || employee.bankName || employee.bank;
   }
@@ -224,7 +259,7 @@ const enrichLineVariables = async (inputVariables: Record<string, any>, lineConf
   variables.settlementAmount = variables.settlementAmount || variables.settlementResult || formatMoney(0);
   variables.rejectReason = variables.rejectReason || variables.reason || variables.remark || "กรุณาตรวจสอบและแก้ไขข้อมูลก่อนส่งอนุมัติอีกครั้ง";
   variables.liffSlipUrl = variables.liffSlipUrl || buildLiffUrl(lineConfig, variables.advId);
-  variables.profileImageUrl = variables.profileImageUrl || "https://placehold.co/320x320/png?text=Profile";
+  variables.profileImageUrl = resolveProfileImageUrl(null, variables.profileImageUrl) || "https://placehold.co/320x320/png?text=Profile";
   variables.outstandingShort = variables.outstandingShort || shortMoney(outstandingTotal);
   variables.totalAdvanceShort = variables.totalAdvanceShort || shortMoney(totalAdvance);
   variables.closedAmountShort = variables.closedAmountShort || shortMoney(closedTotal);
@@ -240,7 +275,7 @@ const enrichLineVariables = async (inputVariables: Record<string, any>, lineConf
   return variables;
 };
 
-const selectLineRecipients = (allEmployees: any[], trigger: any, variables: Record<string, any>, targetEmployeeId?: string) => {
+const selectLineRecipients = (allEmployees: any[], trigger: any, variables: Record<string, any>, targetEmployeeId?: string, lineConfig?: any) => {
   const recipientIdsSet = new Set<string>();
   const mode = trigger.recipientMode || "target";
   const targetIds = new Set([targetEmployeeId, variables.targetEmployeeId, variables.employeeId, variables.requesterId].filter(Boolean).map(String));
@@ -258,6 +293,13 @@ const selectLineRecipients = (allEmployees: any[], trigger: any, variables: Reco
     if (mode === "accounting" && accountingRoles.has(emp.role)) recipientIdsSet.add(emp.lineUserId);
     if (mode === "approvers" && approverRoles.has(emp.role)) recipientIdsSet.add(emp.lineUserId);
   });
+
+  if (lineConfig?.groupId && typeof lineConfig.groupId === "string" && lineConfig.groupId.trim()) {
+    recipientIdsSet.add(lineConfig.groupId.trim());
+  }
+  if (lineConfig?.lineGroupId && typeof lineConfig.lineGroupId === "string" && lineConfig.lineGroupId.trim()) {
+    recipientIdsSet.add(lineConfig.lineGroupId.trim());
+  }
 
   return Array.from(recipientIdsSet);
 };
@@ -287,6 +329,8 @@ async function startServer() {
       const file = req.file;
       const extension = path.extname(file.originalname) || ".jpg";
       const filename = `${Date.now()}${extension}`;
+      const mimeType = file.mimetype || "image/jpeg";
+      const profileImageDataUrl = `data:${mimeType};base64,${file.buffer.toString("base64")}`;
       
       // Ensure specific employee folder exists
       const empDir = path.join(PROFILES_DIR, employeeId);
@@ -305,6 +349,7 @@ async function startServer() {
         try {
           await firestoreDb.collection("employees").doc(employeeId).update({
               profilePhotoURL: downloadURL,
+              profileImage: profileImageDataUrl,
               profilePhotoUpdatedAt: FieldValue.serverTimestamp()
           });
         } catch (fsErr: any) {
@@ -312,7 +357,7 @@ async function startServer() {
         }
       }
       
-      res.json({ status: "success", downloadURL });
+      res.json({ status: "success", downloadURL, profileImage: profileImageDataUrl });
     } catch (err: any) {
       console.error("Local profile photo upload error:", err);
       res.status(500).json({ error: err.message });
@@ -345,6 +390,30 @@ async function startServer() {
     } catch (err: any) {
       console.error("Error serving profile photo:", err);
       res.status(500).send("Internal server error");
+    }
+  });
+
+  app.get("/api/profile-image/:employeeId", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(503).send("Firestore is not configured");
+      const { employeeId } = req.params;
+      const employee: any = await getDocByIdOrField("employees", employeeId, "employeeId");
+      const dataUrl = employee?.profileImage;
+      if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) {
+        return res.status(404).send("Profile image not found in database");
+      }
+
+      const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+      if (!match) return res.status(400).send("Invalid profile image data");
+
+      const [, contentType, base64Data] = match;
+      const buffer = Buffer.from(base64Data, "base64");
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400");
+      return res.send(buffer);
+    } catch (err: any) {
+      console.error("Error serving database profile image:", err);
+      return res.status(500).send("Internal server error");
     }
   });
 
@@ -468,7 +537,7 @@ async function startServer() {
         allEmployees.push({ id: docSnap.id, ...docSnap.data() });
       });
 
-      const recipients = selectLineRecipients(allEmployees, trigger, resolvedVariables, targetEmployeeId);
+      const recipients = selectLineRecipients(allEmployees, trigger, resolvedVariables, targetEmployeeId, lineConfig);
       if (recipients.length === 0) {
         console.log("No recipients found with a registered LINE User ID.");
         return res.json({ status: "skipped", message: "No employees have a registered LINE User ID." });
@@ -495,7 +564,7 @@ async function startServer() {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: `Bearer ${channelAccessToken}`
+              Authorization: `Bearer ${channelAccessToken.trim()}`
             },
             body: JSON.stringify({
               to: userId,
@@ -564,7 +633,7 @@ async function startServer() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${lineConfig.channelAccessToken}`
+            Authorization: `Bearer ${lineConfig.channelAccessToken.trim()}`
           },
           body: JSON.stringify({
             replyToken: event.replyToken,
