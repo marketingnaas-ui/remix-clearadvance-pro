@@ -75,6 +75,11 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
   const [imageScale, setImageScale] = useState<number>(currentEmployee.imageScale || 1);
   const [imagePosition, setImagePosition] = useState<{x: number, y: number}>(currentEmployee.imagePosition || {x: 50, y: 50});
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const heroImageSrc = dashboardImage
+    ? dashboardImage.startsWith("data:")
+      ? dashboardImage
+      : `${dashboardImage}${dashboardImage.includes("?") ? "&" : "?"}v=${currentEmployee.profilePhotoUpdatedAt?.seconds || ""}`
+    : "";
 
   // Auto-dismiss success/error alerts after 4 seconds
   useEffect(() => {
@@ -95,6 +100,17 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
       return () => clearTimeout(timer);
     }
   }, [successMessage, errorMessage]);
+
+  useEffect(() => {
+    setDashboardImage(currentEmployee.profilePhotoURL || currentEmployee.profileImage || "");
+    setImageScale(currentEmployee.imageScale || 1);
+    setImagePosition(currentEmployee.imagePosition || { x: 50, y: 50 });
+  }, [
+    currentEmployee.profilePhotoURL,
+    currentEmployee.profileImage,
+    currentEmployee.imageScale,
+    currentEmployee.imagePosition,
+  ]);
 
   // Notification Drawer State for Employees
   const [isNotificationOpen, setIsNotificationOpen] = useState<boolean>(false);
@@ -526,7 +542,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
             {/* Background Image */}
             {dashboardImage ? (
               <img
-                src={`${dashboardImage}${dashboardImage.includes('?') ? '&' : '?'}v=${currentEmployee.profilePhotoUpdatedAt?.seconds || ''}`}
+                src={heroImageSrc}
                 alt="hero profile"
                 className="absolute inset-0 w-full h-full object-cover"
                 loading="lazy"
@@ -571,7 +587,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                   reader.onload = (event) => {
                     const img = new Image();
                     img.onload = () => {
-                      const maxDim = 1600;
+                      const maxDim = 900;
                       let width = img.width;
                       let height = img.height;
                       
@@ -591,6 +607,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                       const ctx = canvas.getContext("2d");
                       if (ctx) {
                         ctx.drawImage(img, 0, 0, width, height);
+                        const fallbackDataUrl = canvas.toDataURL("image/jpeg", 0.76);
                         canvas.toBlob(
                           async (blob) => {
                             if (!blob) {
@@ -636,11 +653,32 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                               }
                             } catch (error) {
                               console.error("Error updating profile image:", error);
+                              try {
+                                const employeeRef = doc(db, "employees", currentEmployee.id);
+                                await updateDoc(employeeRef, {
+                                  profilePhotoURL: "",
+                                  profileImage: fallbackDataUrl,
+                                  profilePhotoUpdatedAt: serverTimestamp()
+                                });
+                                setDashboardImage(fallbackDataUrl);
+                                setSuccessMessage("Saved profile image in Vercel fallback mode");
+                                if (onProfileUpdate) {
+                                  onProfileUpdate({
+                                    ...currentEmployee,
+                                    profilePhotoURL: "",
+                                    profileImage: fallbackDataUrl,
+                                    profilePhotoUpdatedAt: { seconds: Math.floor(Date.now() / 1000) }
+                                  });
+                                }
+                                return;
+                              } catch (fallbackError) {
+                                console.error("Firestore fallback profile update failed:", fallbackError);
+                              }
                               setErrorMessage("ไม่สามารถอัปเดตรูปภาพได้");
                             }
                           },
                           "image/jpeg",
-                          0.9
+                          0.76
                         );
                       } else {
                         setErrorMessage("ไม่สามารถสร้าง Canvas สำหรับจัดการรูปภาพได้");

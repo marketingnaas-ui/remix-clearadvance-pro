@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { User } from "lucide-react";
 
 interface ProfileImageProps {
@@ -12,9 +12,15 @@ interface ProfileImageProps {
 export default function ProfileImage({ photoURL, image, name, className, updatedAt }: ProfileImageProps) {
   const [error, setError] = useState(false);
 
-  const src = photoURL 
-    ? `${photoURL}${photoURL.includes('?') ? '&' : '?'}v=${updatedAt?.seconds || ''}` 
+  const src = photoURL
+    ? photoURL.startsWith("data:")
+      ? photoURL
+      : `${photoURL}${photoURL.includes("?") ? "&" : "?"}v=${updatedAt?.seconds || ""}`
     : image;
+
+  useEffect(() => {
+    setError(false);
+  }, [src]);
 
   if (!src || error) {
     return (

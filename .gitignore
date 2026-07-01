@@ -11,6 +11,7 @@ coverage/
 closing_divs.txt
 divs.txt
 *.local
+profiles/
 
 # Credentials
 *service-account*.json

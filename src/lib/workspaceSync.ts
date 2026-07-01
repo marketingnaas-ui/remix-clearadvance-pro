@@ -11,6 +11,10 @@ export interface GoogleWorkspaceSettings {
   autoSyncSheets?: boolean;
   autoSyncDrive?: boolean;
   lastSyncedAt?: string;
+  appsScriptWebAppUrl?: string;
+  appsScriptApiKey?: string;
+  mirrorAdvancesEnabled?: boolean;
+  mirrorVaultFilesEnabled?: boolean;
 }
 
 const GOOGLE_TOKEN_STORAGE_KEY = "clearadvance_google_access_token";

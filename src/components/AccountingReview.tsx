@@ -3,15 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { collection, doc, getDocs, updateDoc, query, where, onSnapshot, setDoc } from "firebase/firestore";
-import { db } from "../lib/firebase";
-import { handleFirestoreError, OperationType } from "../lib/errorUtils";
+import { auth, db, handleFirestoreError, OperationType, safeJsonStringify } from "../lib/firebase";
 import { triggerAutoSyncSheetsIfEnabled, triggerAutoSyncVaultFoldersIfEnabled } from "../lib/workspaceSync";
 import { sendLineNotification } from "../lib/lineNotify";
 import { Advance, AdvanceStatus, ClearingLog, ClearingItem, ActionType, AuditLog, Employee, UserRole } from "../types";
 import { exportToExcel } from "../lib/excelExport";
-import { FileText, ZoomIn, ZoomOut, Check, X, AlertTriangle, CornerUpLeft, BookOpen, Clock, Calendar, Landmark, DollarSign, ListFilter, RefreshCw, Eye, Sparkles, FileSpreadsheet } from "lucide-react";
+import { FileText, ZoomIn, ZoomOut, Check, X, AlertTriangle, CornerUpLeft, BookOpen, Clock, Calendar, Landmark, DollarSign, ListFilter, RefreshCw, Eye, Sparkles, FileSpreadsheet, Search, Filter, List, Grid } from "lucide-react";
 
 interface AccountingReviewProps {
   currentEmployee: Employee;
@@ -26,6 +25,13 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
   const [allAdvances, setAllAdvances] = useState<Advance[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<"pending" | "history">("pending");
+
+  // Filtering & Sorting States
+  const [searchTerm, setSearchTerm] = useState("");
+  const [projectFilter, setProjectFilter] = useState("ALL");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [sortBy, setSortBy] = useState<"date" | "name" | "status">("date");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
   // Split View controls
   const [zoomLevel, setZoomLevel] = useState<number>(100);
@@ -113,12 +119,57 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
       setAdvances(list);
       setLoading(false);
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, "advances", false);
+      handleFirestoreError(new Error(safeJsonStringify(error)), OperationType.GET, "advances", false);
       setLoading(false);
     });
 
     return () => unsubscribe();
   }, [activeTab]);
+
+  // Derived filtered and sorted advances
+  const filteredAndSortedAdvances = useMemo(() => {
+    let result = [...advances];
+
+    // Search filter
+    if (searchTerm) {
+      const lowSearch = searchTerm.toLowerCase();
+      result = result.filter(a => 
+        a.advId.toLowerCase().includes(lowSearch) || 
+        a.employeeName.toLowerCase().includes(lowSearch) || 
+        a.projectId.toLowerCase().includes(lowSearch)
+      );
+    }
+
+    // Project filter
+    if (projectFilter !== "ALL") {
+      result = result.filter(a => a.projectId === projectFilter);
+    }
+
+    // Status filter
+    if (statusFilter !== "ALL") {
+      result = result.filter(a => a.status === statusFilter);
+    }
+
+    // Sorting
+    result.sort((a, b) => {
+      let comparison = 0;
+      if (sortBy === "date") {
+        comparison = b.createdAt.localeCompare(a.createdAt);
+      } else if (sortBy === "name") {
+        comparison = a.employeeName.localeCompare(b.employeeName);
+      } else if (sortBy === "status") {
+        comparison = a.status.localeCompare(b.status);
+      }
+
+      return sortOrder === "desc" ? comparison : -comparison;
+    });
+
+    return result;
+  }, [advances, searchTerm, projectFilter, statusFilter, sortBy, sortOrder]);
+
+  const projectsList = useMemo(() => {
+    return Array.from(new Set(allAdvances.map(a => a.projectId).filter(Boolean))).sort();
+  }, [allAdvances]);
 
   useEffect(() => {
     const qAll = collection(db, "advances");
@@ -127,7 +178,7 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
       snapshot.forEach(d => list.push({ id: d.id, ...d.data() } as Advance));
       setAllAdvances(list);
     }, (err) => {
-      handleFirestoreError(err, OperationType.GET, "advances", false);
+      handleFirestoreError(new Error(safeJsonStringify(err)), OperationType.GET, "advances", false);
     });
     return () => unsubAll();
   }, []);
@@ -212,7 +263,7 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
 
     if (nextStatus === AdvanceStatus.CLOSED) {
       // Send real LINE Notification
-      sendLineNotification({
+      await sendLineNotification({
         triggerId: "onSettlement",
         variables: {
           advId: adv.advId,
@@ -298,7 +349,7 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
       setSuccess(`บันทึกการตรวจสอบบิล ${editedVendorName} เรียบร้อยแล้ว (สถานะใบเบิก: ${nextStatus})`);
       setSelectedAdv(null);
     } catch (err) {
-      console.error(err);
+      console.error(safeJsonStringify(err));
       setError("เกิดข้อผิดพลาดในการตรวจสอบบัญชี");
     }
   };
@@ -363,7 +414,7 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
       setSuccess(`บันทึกอนุมัติการเคลียร์บางส่วนร้านค้า ${editedVendorName} สำเร็จ (สถานะใบเบิก: ${nextStatus})`);
       setSelectedAdv(null);
     } catch (err) {
-      console.error(err);
+      console.error(safeJsonStringify(err));
       setError("เกิดข้อผิดพลาดในการทำรายการ");
     }
   };
@@ -431,7 +482,7 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
       setSuccess(`ตีกลับเอกสารเคลียร์ยอด ${selectedAdv.advId} ให้พนักงานแก้ไข เรียบร้อยแล้ว`);
       setSelectedAdv(null);
     } catch (err) {
-      console.error(err);
+      console.error(safeJsonStringify(err));
       setError("เกิดข้อผิดพลาดในการส่งคืนข้อมูล");
     }
   };
@@ -484,7 +535,7 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
       setSuccess(`บันทึกการตรวจสอบบิล ${editedVendorName} เรียบร้อยแล้ว (สถานะใบเบิก: ${nextStatus})`);
       setSelectedAdv(null);
     } catch (err) {
-      console.error(err);
+      console.error(safeJsonStringify(err));
       setError("เกิดข้อผิดพลาดในการเปลี่ยนสถานะ");
     }
   };
@@ -582,15 +633,65 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
             </button>
           </div>
 
-          <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm space-y-4">
+      <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm space-y-4">
+            <div className="flex flex-col md:flex-row gap-4">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+                <input
+                  type="text"
+                  placeholder="ค้นหาด้วยรหัสใบเบิก, พนักงาน, โครงการ..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-stone-900"
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <select
+                  value={projectFilter}
+                  onChange={(e) => setProjectFilter(e.target.value)}
+                  className="px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-xs font-bold text-stone-700"
+                >
+                  <option value="ALL">ทุกโครงการ</option>
+                  {projectsList.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-xs font-bold text-stone-700"
+                >
+                  <option value="ALL">ทุกสถานะ</option>
+                  <option value={AdvanceStatus.PENDING_AUDIT}>รอตรวจสอบบิล</option>
+                  <option value={AdvanceStatus.PARTIALLY_CLEARED}>เคลียร์บางส่วน</option>
+                  <option value={AdvanceStatus.WAITING_CLEARANCE}>รอเคลียร์บิล</option>
+                  <option value={AdvanceStatus.WAITING_ORIGINAL_DOC}>รอเอกสารจริง</option>
+                  <option value={AdvanceStatus.CLOSED}>ปิดยอดแล้ว</option>
+                  <option value={AdvanceStatus.RETURNED}>ถูกตีกลับ</option>
+                </select>
+                <div className="flex items-center gap-1 bg-stone-50 border border-stone-200 rounded-xl px-2">
+                  <span className="text-[10px] font-bold text-stone-400 uppercase px-1">เรียงตาม:</span>
+                  <button onClick={() => setSortBy("date")} className={`px-2 py-1.5 text-[10px] font-bold rounded-lg ${sortBy === "date" ? "bg-stone-900 text-white" : "text-stone-500"}`}>วันที่</button>
+                  <button onClick={() => setSortBy("name")} className={`px-2 py-1.5 text-[10px] font-bold rounded-lg ${sortBy === "name" ? "bg-stone-900 text-white" : "text-stone-500"}`}>ชื่อ</button>
+                  <button onClick={() => setSortBy("status")} className={`px-2 py-1.5 text-[10px] font-bold rounded-lg ${sortBy === "status" ? "bg-stone-900 text-white" : "text-stone-500"}`}>สถานะ</button>
+                  <button onClick={() => setSortOrder(prev => prev === "asc" ? "desc" : "asc")} className="p-1.5 text-stone-500 hover:text-stone-900 transition flex items-center gap-1">
+                    <RefreshCw className={`w-3.5 h-3.5 ${sortOrder === "asc" ? "" : "rotate-180"}`} />
+                    <span className="text-[9px] font-bold uppercase">
+                      {sortBy === "date" 
+                        ? (sortOrder === "desc" ? "ใหม่สุด" : "เก่าสุด")
+                        : (sortOrder === "desc" ? "ฮ-ก" : "ก-ฮ")}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <h3 className="font-bold text-stone-900 text-sm">เลือกเอกสารใบเบิกเงินรอการตรวจสอบบัญชี</h3>
             {loading ? (
               <div className="text-center py-10 text-stone-500 text-xs">กำลังค้นหาข้อมูล...</div>
-            ) : advances.length === 0 ? (
-              <div className="text-center py-10 text-stone-400 text-xs">ไม่มีใบเบิกเงินค้างเคลียร์ที่ต้องตรวจในเวลานี้</div>
+            ) : filteredAndSortedAdvances.length === 0 ? (
+              <div className="text-center py-10 text-stone-400 text-xs">ไม่พบรายการใบเบิกตามเงื่อนไขที่เลือก</div>
             ) : (
               <div className="divide-y divide-stone-100">
-                {advances.map((adv) => (
+                {filteredAndSortedAdvances.map((adv) => (
                   <div
                     key={adv.id}
                     onClick={() => setSelectedAdv(adv)}
@@ -618,12 +719,44 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
         </div>
       ) : (
         <div className="space-y-4">
+          {/* Queue Bar */}
+          <div className="flex gap-2 overflow-x-auto pb-2 mb-2">
+            {filteredAndSortedAdvances.slice(0, 5).map((adv) => (
+              <div 
+                key={adv.id} 
+                onClick={() => setSelectedAdv(adv)}
+                className={`flex items-center gap-2 p-2 rounded-xl border cursor-pointer ${selectedAdv?.id === adv.id ? "bg-stone-900 border-stone-900 text-white" : "bg-white border-stone-200"}`}
+              >
+                <img src={adv.employeeImageUrl || "/placeholder.jpg"} className="w-6 h-6 rounded-full" />
+                <div className="text-[10px] whitespace-nowrap">
+                  <div className="font-bold">{adv.employeeName}</div>
+                  <div className={selectedAdv?.id === adv.id ? "text-stone-300" : "text-stone-500"}>{adv.advId}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
           <div className="bg-stone-950 text-stone-100 px-6 py-4 rounded-2xl flex items-center justify-between">
             <div className="flex items-center gap-3">
               <span className="font-mono text-xs font-bold text-white bg-stone-850 px-2.5 py-1 rounded border border-stone-800">{selectedAdv.advId}</span>
               <span className="text-xs text-stone-300 truncate">โครงการ: <span className="font-bold text-white">{selectedAdv.projectId}</span> • ผู้ขอ: <span className="font-semibold text-white">{selectedAdv.employeeName}</span></span>
             </div>
             <button onClick={() => setSelectedAdv(null)} className="px-3 py-1 bg-stone-800 hover:bg-stone-700 text-white border border-stone-700 rounded-lg text-xs font-semibold transition">เลือกเอกสารอื่น</button>
+          </div>
+
+          {/* New Summary Box */}
+          <div className="grid grid-cols-4 gap-4 p-4 bg-white border border-stone-200 rounded-2xl shadow-sm">
+            {[
+              { label: "ยอดเบิกตามใบเบิก", value: selectedAdv.requestAmount },
+              { label: "ยอดยกมา", value: selectedAdv.requestAmount - (clearingItems.filter(i => i.accountantApproved && i.clearingLogId !== (activeItem?.clearingLogId || "")).reduce((sum, item) => sum + item.netAmount, 0)) },
+              { label: "ยอดเคลียร์ในเอกสารนี้", value: activeItem?.netAmount || 0 },
+              { label: "ยอดคงค้าง", value: selectedAdv.outstandingAmount - (activeItem?.netAmount || 0) }
+            ].map((item, idx) => (
+              <div key={idx} className="space-y-1">
+                <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">{item.label}</span>
+                <span className="block text-sm font-bold font-mono text-stone-900">{formatCurrency(item.value)}</span>
+              </div>
+            ))}
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-[600px]">
@@ -647,8 +780,15 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
                 </div>
               )}
 
-              <div className="flex-1 min-h-[400px] bg-stone-50 border border-stone-200 rounded-2xl flex items-center justify-center overflow-auto p-4 relative">
-                {activeItem?.imageUrl ? <img src={activeItem.imageUrl} alt="Receipt" style={{ transform: `scale(${zoomLevel / 100})` }} referrerPolicy="no-referrer" className="max-h-[380px] max-w-full object-contain rounded transition-transform origin-center shadow-md" /> : <div className="text-center text-stone-400 text-xs">ไม่มีไฟล์รูปใบเสร็จแนบในระบบ</div>}
+              <div className="flex-1 min-h-[400px] bg-stone-50 border border-stone-200 rounded-2xl flex items-center justify-center overflow-auto p-4 relative flex-col gap-2">
+                {(activeItem?.imageUrl || (activeItem?.additionalImageUrls && activeItem.additionalImageUrls.length > 0)) ? (
+                  <>
+                    {console.log("activeItem preview:", activeItem)}
+                    {[...(activeItem.imageUrl && typeof activeItem.imageUrl === 'string' ? activeItem.imageUrl.split(',').filter(Boolean) : []), ...(activeItem.additionalImageUrls || [])].map((url, idx) => (
+                      <img key={idx} src={url} alt={`Receipt ${idx + 1}`} style={{ transform: `scale(${zoomLevel / 100})` }} referrerPolicy="no-referrer" className="max-h-[380px] max-w-full object-contain rounded transition-transform origin-center shadow-md" />
+                    ))}
+                  </>
+                ) : <div className="text-center text-stone-400 text-xs">ไม่มีไฟล์รูปใบเสร็จแนบในระบบ</div>}
               </div>
 
               <div className="flex flex-col gap-2.5">
@@ -665,10 +805,13 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
             <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm flex flex-col justify-between gap-6">
               <div className="space-y-4">
                 <div className="border-b border-stone-100 pb-3 flex items-center justify-between"><h3 className="font-bold text-stone-900 text-sm">ข้อมูลสรุปบิลประมวลผล</h3></div>
-                <div className="p-4 bg-stone-100 rounded-2xl border border-stone-200 text-xs space-y-2">
-                  <p className="font-bold text-stone-800 border-b border-stone-200 pb-1 mb-2">สรุปรายการทั้งหมด ({clearingItems.length} รายการ):</p>
+                <div className="p-4 bg-[#f2f8ff] rounded-2xl border border-blue-100 text-xs space-y-2">
+                  <p className="font-bold text-stone-900 font-sans border-b border-blue-200 pb-1 mb-2">สรุปรายการทั้งหมด ({clearingItems.length} รายการ):</p>
                   <div className="space-y-1 font-mono text-[11px] text-stone-700">
-                    <div className="flex justify-between"><span>ยอดรวมสุทธิ:</span> <span>{formatCurrency(clearingItems.reduce((acc, item) => acc + item.netAmount, 0))}</span></div>
+                    <div className="flex justify-between">
+                      <span className="font-sans">ยอดรวมสุทธิ:</span>
+                      <span className="font-bold text-black">{formatCurrency(clearingItems.reduce((acc, item) => acc + item.netAmount, 0))}</span>
+                    </div>
                   </div>
                 </div>
 
@@ -677,6 +820,28 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
                     <div className="grid grid-cols-2 gap-4 text-xs">
                       <div><span className="text-stone-400 font-semibold block uppercase text-[10px] mb-1">ชื่อร้านค้า</span><input type="text" value={editedVendorName} onChange={(e) => setEditedVendorName(e.target.value)} className="w-full px-2.5 py-1.5 bg-stone-50 border border-stone-200 rounded-lg text-stone-900 font-semibold" /></div>
                       <div><span className="text-stone-400 font-semibold block uppercase text-[10px] mb-1">ยอดเงินสุทธิ</span><input type="number" value={editedNetAmt || ""} onChange={(e) => { const val = parseFloat(e.target.value) || 0; setEditedNetAmt(val); setApprovedAmountOverride(val); }} className="w-full px-2.5 py-1.5 bg-stone-50 border border-stone-200 rounded-lg font-mono font-bold text-stone-900" /></div>
+                    </div>
+                    
+                    {/* Add detailed view of employee submitted data */}
+                    <div className="bg-stone-50 border border-stone-200 rounded-xl p-4 space-y-3">
+                      <h4 className="text-[11px] font-bold text-stone-900 border-b border-stone-200 pb-2">รายละเอียดรายการในบิล</h4>
+                      <div className="space-y-2">
+                        {activeItem.lineItems?.map((li, idx) => (
+                          <div key={idx} className="flex justify-between items-center text-xs">
+                            <div>
+                              <span className="text-stone-800 font-semibold">{li.itemName}</span>
+                              <div className="text-[10px] text-stone-500">{li.qty} x {formatCurrency(li.unitPrice)}</div>
+                            </div>
+                            <span className="font-mono font-bold text-stone-900">{formatCurrency(li.amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="border-t border-stone-200 pt-2 space-y-1 font-mono text-[10px] text-stone-600">
+                        {activeItem.discount ? <div className="flex justify-between"><span>ส่วนลด:</span><span>-{formatCurrency(activeItem.discount)}</span></div> : null}
+                        {activeItem.otherExpenses ? <div className="flex justify-between"><span>ค่าใช้จ่ายอื่นๆ:</span><span>{formatCurrency(activeItem.otherExpenses)}</span></div> : null}
+                        <div className="flex justify-between"><span>VAT ({activeItem.vatType}):</span><span>{formatCurrency(activeItem.vatAmount || 0)}</span></div>
+                        <div className="flex justify-between"><span>หัก ณ ที่จ่าย ({activeItem.whtRate}):</span><span>-{formatCurrency(activeItem.whtAmount || 0)}</span></div>
+                      </div>
                     </div>
                   </div>
                 )}

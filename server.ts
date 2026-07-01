@@ -546,7 +546,7 @@ async function startServer() {
             const advance: any = await getDocByIdOrField("advances", advId, "advId");
             if (advance?.id) {
               await firestoreDb.collection("advances").doc(advance.id).set({
-                status: action === "approve" ? "APPROVED" : "REJECTED",
+                status: action === "approve" ? "WAITING_TRANSFER" : "REJECTED",
                 lineActionAt: FieldValue.serverTimestamp(),
                 lineActionBy: event.source?.userId || "",
               }, { merge: true });
@@ -578,6 +578,43 @@ async function startServer() {
     } catch (err: any) {
       console.error("LINE webhook error:", err);
       return res.status(500).json({ error: err.message || "Internal server error during LINE webhook." });
+    }
+  });
+
+  app.post("/api/google-workspace/advance-sync", async (req, res) => {
+    try {
+      const { config, payload } = req.body || {};
+      if (!config?.appsScriptWebAppUrl) {
+        return res.status(400).json({ error: "Missing appsScriptWebAppUrl" });
+      }
+
+      const scriptResponse = await fetch(config.appsScriptWebAppUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          apiKey: config.appsScriptApiKey || "",
+          action: "syncAdvanceBundle",
+          mirrorAdvancesEnabled: config.mirrorAdvancesEnabled !== false,
+          mirrorVaultFilesEnabled: config.mirrorVaultFilesEnabled !== false,
+          payload,
+        }),
+      });
+
+      const text = await scriptResponse.text();
+      if (!scriptResponse.ok) {
+        return res.status(scriptResponse.status).send(text || "Apps Script sync failed");
+      }
+
+      try {
+        return res.json(JSON.parse(text));
+      } catch {
+        return res.send(text);
+      }
+    } catch (err: any) {
+      console.error("Google Workspace advance sync error:", err);
+      return res.status(500).json({ error: err?.message || "Internal server error during Apps Script sync." });
     }
   });
 

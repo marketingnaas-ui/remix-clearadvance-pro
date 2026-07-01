@@ -14,7 +14,7 @@ export interface LineNotificationPayload {
   targetEmployeeId?: string;
 }
 
-export async function sendLineNotification(payload: LineNotificationPayload): Promise<void> {
+export async function sendLineNotification(payload: LineNotificationPayload): Promise<any | null> {
   try {
     const res = await fetch("/api/line/send-notification", {
       method: "POST",
@@ -23,12 +23,15 @@ export async function sendLineNotification(payload: LineNotificationPayload): Pr
       },
       body: JSON.stringify(payload),
     });
+    const data = await res.json().catch(async () => ({ raw: await res.text() }));
     if (!res.ok) {
-      console.warn("Failed to send LINE notification:", await res.text());
+      console.warn("Failed to send LINE notification:", data);
     } else {
-      console.log("LINE notification triggered successfully:", await res.json());
+      console.log("LINE notification triggered successfully:", data);
     }
+    return data;
   } catch (err) {
     console.error("Error triggering LINE notification:", err);
+    return null;
   }
 }

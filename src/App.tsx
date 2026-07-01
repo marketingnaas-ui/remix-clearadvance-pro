@@ -23,6 +23,8 @@ import AccountingReports from "./components/AccountingReports";
 import ProfileSettings from "./components/ProfileSettings";
 import UploadSlipLiff from "./components/UploadSlipLiff";
 import { Employee, UserRole } from "./types";
+import { db } from "./lib/firebase";
+import { doc, onSnapshot } from "firebase/firestore";
 import { LogOut, LayoutDashboard, Send, CheckSquare, Receipt, HardDrive, History, FileCheck2, User, ChevronRight, Settings, Plus, X as CloseIcon, BarChart3, TrendingUp, FileCheck, Lock, BookOpen } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -52,6 +54,23 @@ export default function App() {
       localStorage.removeItem("currentEmployee");
     }
   }, [currentEmployee]);
+
+  React.useEffect(() => {
+    if (!currentEmployee?.id) return;
+
+    const unsubscribe = onSnapshot(doc(db, "employees", currentEmployee.id), (snap) => {
+      if (!snap.exists()) return;
+      const latestEmployee = { id: snap.id, ...snap.data() } as Employee;
+      setCurrentEmployee((prev) => {
+        if (!prev || prev.id !== latestEmployee.id) return prev;
+        return { ...prev, ...latestEmployee };
+      });
+    }, (err) => {
+      console.warn("Could not refresh current employee profile:", err);
+    });
+
+    return () => unsubscribe();
+  }, [currentEmployee?.id]);
 
   // Get mobile navigation items based on role
   const getMobileNavItems = () => {

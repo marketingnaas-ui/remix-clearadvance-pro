@@ -36,14 +36,23 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
   const [showProjectDropdown, setShowProjectDropdown] = useState<boolean>(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const [category, setCategory] = useState<string>("");
-  const [requestAmount, setRequestAmount] = useState<number>(0);
-  const [details, setDetails] = useState<string>("");
+  const [requestItems, setRequestItems] = useState<{description: string; category: string; amount: number}[]>([
+    { description: "", category: "", amount: 0 }
+  ]);
+  const requestAmount = requestItems.reduce((sum, item) => sum + (item.amount || 0), 0);
+  const category = requestItems.length > 0 ? requestItems[0].category : "";
+  const details = requestItems.map(item => item.description).join(", ");
+
   const [neededDate, setNeededDate] = useState<string>("");
   const [note, setNote] = useState<string>("");
-  const [attachmentUrl, setAttachmentUrl] = useState<string>("");
+  const [attachments, setAttachments] = useState<{ url: string; name: string; type: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [generatedAdvId, setGeneratedAdvId] = useState<string>("กำลังสร้างเลข ADV-ID...");
+
+  const [useCustomAccount, setUseCustomAccount] = useState<boolean>(false);
+  const [customBankName, setCustomBankName] = useState<string>("");
+  const [customAccountNo, setCustomAccountNo] = useState<string>("");
+  const [customAccountName, setCustomAccountName] = useState<string>("");
 
   // Click outside to close project dropdown
   useEffect(() => {
@@ -69,11 +78,15 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
         
         // Populate default values if not editing and no values are set
         if (!editingDraft) {
-          if (globalSettings.projects && globalSettings.projects.length > 0 && selectedProjects.length === 0) {
-            setSelectedProjects([globalSettings.projects[0]]);
-          }
-          if (globalSettings.categories && globalSettings.categories.length > 0 && category === "") {
-            setCategory(globalSettings.categories[0]);
+          if (globalSettings.categories && globalSettings.categories.length > 0) {
+            setRequestItems(prev => {
+              if (prev.length === 1 && !prev[0].category) {
+                const newItems = [...prev];
+                newItems[0].category = globalSettings.categories[0];
+                return newItems;
+              }
+              return prev;
+            });
           }
         }
         
@@ -106,14 +119,14 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
       if (editingDraft.projectId) {
         setSelectedProjects(editingDraft.projectId.split(", ").map(p => p.trim()));
       }
-      if (editingDraft.category) {
-        setCategory(editingDraft.category);
-      }
-      if (editingDraft.requestAmount) {
-        setRequestAmount(editingDraft.requestAmount);
-      }
-      if (editingDraft.details) {
-        setDetails(editingDraft.details);
+      if (editingDraft.requestItems && editingDraft.requestItems.length > 0) {
+        setRequestItems(editingDraft.requestItems);
+      } else if (editingDraft.details || editingDraft.requestAmount) {
+        setRequestItems([{
+          description: editingDraft.details || "",
+          category: editingDraft.category || "",
+          amount: editingDraft.requestAmount || 0
+        }]);
       }
       if (editingDraft.neededDate) {
         setNeededDate(editingDraft.neededDate);
@@ -122,7 +135,21 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
         setNote(editingDraft.note);
       }
       if (editingDraft.attachmentUrl) {
-        setAttachmentUrl(editingDraft.attachmentUrl);
+        setAttachments([{ url: editingDraft.attachmentUrl, name: "ไฟล์หลัก.jpg", type: "image/jpeg" }]);
+      }
+      if (editingDraft.additionalAttachmentUrls) {
+        const additional = editingDraft.additionalAttachmentUrls.map((url, i) => ({
+          url,
+          name: `ไฟล์แนบที่ ${i + 1}.jpg`,
+          type: "image/jpeg"
+        }));
+        setAttachments(prev => [...prev, ...additional]);
+      }
+      if (editingDraft.customTransferAccount) {
+        setUseCustomAccount(true);
+        setCustomBankName(editingDraft.customTransferAccount.bankName);
+        setCustomAccountNo(editingDraft.customTransferAccount.accountNo);
+        setCustomAccountName(editingDraft.customTransferAccount.accountName);
       }
       if (editingDraft.advId) {
         setGeneratedAdvId(editingDraft.advId);
@@ -143,19 +170,41 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
       setError("กรุณาเลือกโครงการที่ต้องการใช้เงินอย่างน้อย 1 โครงการ");
       return;
     }
+    
+    // Validate request items
+    for (let i = 0; i < requestItems.length; i++) {
+      const item = requestItems[i];
+      if (!item.description.trim()) {
+        setError(`กรุณากรอกรายละเอียดในรายการที่ ${i + 1}`);
+        return;
+      }
+      if (!item.category) {
+        setError(`กรุณาเลือกหมวดหมู่ในรายการที่ ${i + 1}`);
+        return;
+      }
+      if (item.amount <= 0) {
+        setError(`กรุณากรอกยอดเงินในรายการที่ ${i + 1} ให้มากกว่า 0`);
+        return;
+      }
+    }
+
     if (requestAmount < 100) {
-      setError("จำนวนเงินขอเบิกต้องไม่ต่ำกว่า 100 บาท");
+      setError("จำนวนเงินขอเบิกรวมต้องไม่ต่ำกว่า 100 บาท");
       return;
     }
-    if (!details.trim()) {
-      setError("กรุณากรอกรายละเอียดการเบิก");
-      return;
+
+    if (useCustomAccount) {
+      if (!customBankName.trim() || !customAccountNo.trim() || !customAccountName.trim()) {
+        setError("กรุณากรอกข้อมูลบัญชีธนาคารสำหรับโอนเงินให้ครบถ้วน");
+        return;
+      }
     }
 
     setShowReviewModal(true);
   };
 
   const handleSaveDraft = async () => {
+    if (loading) return;
     setLoading(true);
     setError(null);
     setSuccessMsg(null);
@@ -213,9 +262,18 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
         status: AdvanceStatus.DRAFT,
         createdAt: editingDraft ? editingDraft.createdAt : new Date().toISOString(),
         details,
+        requestItems,
         neededDate,
         note,
-        attachmentUrl: attachmentUrl || "",
+        attachmentUrl: attachments[0]?.url || "",
+        additionalAttachmentUrls: attachments.slice(1).map(a => a.url),
+        ...(useCustomAccount ? {
+          customTransferAccount: {
+            bankName: customBankName,
+            accountNo: customAccountNo,
+            accountName: customAccountName
+          }
+        } : {})
       };
 
       await setDoc(doc(db, "advances", docId), draftAdvance);
@@ -239,15 +297,16 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
       };
       await setDoc(doc(db, "auditLogs", auditLogId), newAudit);
 
-      // Save attachment to VaultFiles if provided
-      if (attachmentUrl) {
-        const fileId = `file-${Date.now()}`;
+      // Save all attachments to VaultFiles
+      for (let i = 0; i < attachments.length; i++) {
+        const att = attachments[i];
+        const fileId = `file-${Date.now()}-${i}`;
         await setDoc(doc(db, "vaultFiles", fileId), {
           id: fileId,
           advId: finalAdvId,
           fileType: "REQUEST",
-          fileUrl: attachmentUrl,
-          fileName: `เอกสารประกอบใบเบิก-${finalAdvId}.jpg`,
+          fileUrl: att.url,
+          fileName: att.name || `เอกสารประกอบใบเบิก-${finalAdvId}-${i + 1}.jpg`,
           uploadedBy: currentEmployee.name,
           uploadedAt: new Date().toISOString(),
         });
@@ -257,10 +316,9 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
       setShowReviewModal(false);
 
       // Clear form inputs
-      setRequestAmount(0);
-      setDetails("");
+      setRequestItems([{ description: "", category: settings?.categories?.[0] || "", amount: 0 }]);
       setNote("");
-      setAttachmentUrl("");
+      setAttachments([]);
 
       setTimeout(() => {
         onSuccess();
@@ -275,6 +333,7 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
   };
 
   const handleConfirmSubmit = async () => {
+    if (loading) return;
     setLoading(true);
     setError(null);
     setSuccessMsg(null);
@@ -333,25 +392,46 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
         status: AdvanceStatus.PENDING_APPROVAL,
         createdAt: editingDraft ? editingDraft.createdAt : new Date().toISOString(),
         details,
+        requestItems,
         neededDate,
         note,
-        attachmentUrl: attachmentUrl || "",
+        attachmentUrl: attachments[0]?.url || "",
+        additionalAttachmentUrls: attachments.slice(1).map(a => a.url),
+        ...(useCustomAccount ? {
+          customTransferAccount: {
+            bankName: customBankName,
+            accountNo: customAccountNo,
+            accountName: customAccountName
+          }
+        } : {})
       };
 
       await setDoc(doc(db, "advances", docId), newAdvance);
 
-      sendLineNotification({
+      const clearanceDate = new Date();
+      clearanceDate.setDate(clearanceDate.getDate() + 15);
+      const photoUrl = currentEmployee.profilePhotoURL || "https://img2.pic.in.th/A4BA5AC0-60F5-42EB-9FA6-B7B10EFC6F48.th.jpeg";
+
+      await sendLineNotification({
         triggerId: "onNewRequest",
         variables: {
           advId: finalAdvId,
+          employeeId: currentEmployee.id,
           employeeName: currentEmployee.name,
-          amount: requestAmount.toLocaleString("th-TH"),
+          amount: requestAmount.toLocaleString("th-TH", { minimumFractionDigits: 0, maximumFractionDigits: 2 }),
           status: "รออนุมัติ",
           projectName: selectedProjects.join(", "),
           category,
           remark: details || "ไม่มีรายละเอียด",
-          date: new Date().toLocaleDateString("th-TH")
-        }
+          date: new Date().toLocaleDateString("en-GB", { day: '2-digit', month: '2-digit', year: 'numeric' }),
+          clearanceDate: clearanceDate.toLocaleDateString("en-GB", { day: '2-digit', month: '2-digit', year: 'numeric' }),
+          outstanding: "38.5K", // Placeholder for template
+          accumulated: "425.8K", // Placeholder for template
+          closed: "387.3K", // Placeholder for template
+          employeePhotoUrl: photoUrl,
+          profileImageUrl: photoUrl
+        },
+        targetEmployeeId: currentEmployee.id
       });
 
       // Trigger automatic background sync
@@ -373,15 +453,16 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
       };
       await setDoc(doc(db, "auditLogs", auditLogId), newAudit);
 
-      // Save attachment to VaultFiles if provided
-      if (attachmentUrl) {
-        const fileId = `file-${Date.now()}`;
+      // Save all attachments to VaultFiles
+      for (let i = 0; i < attachments.length; i++) {
+        const att = attachments[i];
+        const fileId = `file-${Date.now()}-${i}-submit`;
         await setDoc(doc(db, "vaultFiles", fileId), {
           id: fileId,
           advId: finalAdvId,
           fileType: "REQUEST",
-          fileUrl: attachmentUrl,
-          fileName: `เอกสารประกอบใบเบิก-${finalAdvId}.jpg`,
+          fileUrl: att.url,
+          fileName: att.name || `เอกสารประกอบใบเบิก-${finalAdvId}-${i + 1}.jpg`,
           uploadedBy: currentEmployee.name,
           uploadedAt: new Date().toISOString(),
         });
@@ -402,10 +483,9 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
       setShowReviewModal(false);
       
       // Clear form inputs
-      setRequestAmount(0);
-      setDetails("");
+      setRequestItems([{ description: "", category: settings?.categories?.[0] || "", amount: 0 }]);
       setNote("");
-      setAttachmentUrl("");
+      setAttachments([]);
 
       setTimeout(() => {
         onSuccess();
@@ -420,62 +500,64 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 8 * 1024 * 1024) {
-        setError("ขนาดไฟล์ใหญ่เกินไป (จำกัดไม่เกิน 8MB)");
-        return;
-      }
-
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === "string") {
-          const resultStr = reader.result;
-          
-          if (file.type.startsWith("image/")) {
-            const img = document.createElement("img");
-            img.onload = () => {
-              const canvas = document.createElement("canvas");
-              const MAX_WIDTH = 500;
-              const MAX_HEIGHT = 500;
-              let width = img.width;
-              let height = img.height;
-
-              if (width > height) {
-                if (width > MAX_WIDTH) {
-                  height *= MAX_WIDTH / width;
-                  width = MAX_WIDTH;
-                }
-              } else {
-                if (height > MAX_HEIGHT) {
-                  width *= MAX_HEIGHT / height;
-                  height = MAX_HEIGHT;
-                }
-              }
-
-              canvas.width = width;
-              canvas.height = height;
-              const ctx = canvas.getContext("2d");
-              ctx?.drawImage(img, 0, 0, width, height);
-              const compressedBase64 = canvas.toDataURL("image/jpeg", 0.5);
-              setAttachmentUrl(compressedBase64);
-            };
-            img.onerror = () => {
-              setAttachmentUrl(resultStr);
-            };
-            img.src = resultStr;
-          } else {
-            // PDF or other documents: check if size is reasonable (< 350KB) to avoid exceeding Firestore 1MB limits
-            if (file.size > 350 * 1024) {
-              setError("เนื่องจากข้อจำกัดของระบบฐานข้อมูลและประมวลผล กรุณาอัปโหลดเอกสาร PDF ขนาดไม่เกิน 350KB หรืออัปโหลดเป็นรูปภาพแทน");
-              return;
-            }
-            setAttachmentUrl(resultStr);
-          }
+    const files = e.target.files;
+    if (files) {
+      Array.from(files).forEach(file => {
+        if (file.size > 8 * 1024 * 1024) {
+          setError(`ไฟล์ ${file.name} ใหญ่เกินไป (จำกัดไม่เกิน 8MB)`);
+          return;
         }
-      };
-      reader.readAsDataURL(file);
+
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (typeof reader.result === "string") {
+            const resultStr = reader.result;
+            
+            if (file.type.startsWith("image/")) {
+              const img = document.createElement("img");
+              img.onload = () => {
+                const canvas = document.createElement("canvas");
+                const MAX_WIDTH = 800;
+                const MAX_HEIGHT = 800;
+                let width = img.width;
+                let height = img.height;
+
+                if (width > height) {
+                  if (width > MAX_WIDTH) {
+                    height *= MAX_WIDTH / width;
+                    width = MAX_WIDTH;
+                  }
+                } else {
+                  if (height > MAX_HEIGHT) {
+                    width *= MAX_HEIGHT / height;
+                    height = MAX_HEIGHT;
+                  }
+                }
+
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext("2d");
+                ctx?.drawImage(img, 0, 0, width, height);
+                const compressedBase64 = canvas.toDataURL("image/jpeg", 0.7);
+                setAttachments(prev => [...prev, { url: compressedBase64, name: file.name, type: file.type }]);
+              };
+              img.src = resultStr;
+            } else {
+              if (file.size > 500 * 1024) {
+                setError(`ไฟล์ PDF ${file.name} ใหญ่เกินไป (จำกัด 500KB)`);
+                return;
+              }
+              setAttachments(prev => [...prev, { url: resultStr, name: file.name, type: file.type }]);
+            }
+          }
+        };
+        reader.readAsDataURL(file);
+      });
     }
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments(prev => prev.filter((_, i) => i !== index));
   };
 
   return (
@@ -640,64 +722,103 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
               )}
             </div>
 
-            {/* Category Selection */}
-            <div>
-              <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-2">
-                หมวดหมู่ค่าใช้จ่าย (Category)
-              </label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full px-4 py-2 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 text-xs focus:outline-none focus:ring-1 focus:ring-stone-950"
-              >
-                {settings?.categories.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat}
-                  </option>
-                ))}
-              </select>
-            </div>
           </div>
         </div>
 
-        {/* Details & Amount */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="md:col-span-2">
-            <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-2">
-              รายละเอียดและเหตุผลความจำเป็นในการเบิก *
+        {/* Dynamic Items (Details, Category, Amount) */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-stone-200">
+            <label className="block text-sm font-semibold text-stone-900 tracking-wider">
+              รายการค่าใช้จ่ายที่ต้องการเบิก *
             </label>
-            <textarea
-              required
-              rows={3}
-              value={details}
-              onChange={(e) => setDetails(e.target.value)}
-              placeholder="ระบุจุดประสงค์ เช่น ค่าใช้จ่ายเดินทางไปตรวจงานโรงงานบางปู และที่พักวิศวกร"
-              className="w-full px-4 py-3 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 text-sm focus:outline-none focus:ring-1 focus:ring-stone-950 resize-none"
-            />
+            <button
+              type="button"
+              onClick={() => setRequestItems([...requestItems, { description: "", category: settings?.categories?.[0] || "", amount: 0 }])}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-stone-900 text-stone-100 rounded-lg text-[11px] font-bold hover:bg-stone-800 transition shadow-sm"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              เพิ่มรายการใหม่
+            </button>
           </div>
 
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-2">
-                ยอดเงินขอเบิก (บาท) *
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  required
-                  min="0"
-                  step="0.01"
-                  value={requestAmount || ""}
-                  onChange={(e) => setRequestAmount(parseFloat(e.target.value) || 0)}
-                  placeholder="0.00"
-                  className="w-full pl-8 pr-4 py-2 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 text-xs font-mono font-bold focus:outline-none focus:ring-1 focus:ring-stone-950"
-                />
-                <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-stone-500 font-bold text-xs">
-                  ฿
+          <div className="space-y-3">
+            {requestItems.map((item, index) => (
+              <div key={index} className="flex flex-col sm:flex-row gap-3 items-start sm:items-center bg-stone-50 border border-stone-200 p-4 rounded-xl relative group">
+                {requestItems.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newItems = [...requestItems];
+                      newItems.splice(index, 1);
+                      setRequestItems(newItems);
+                    }}
+                    className="absolute -right-2 -top-2 bg-red-100 text-red-600 p-1.5 rounded-full transition shadow-sm hover:bg-red-200 border border-red-200 z-10"
+                    title="ลบรายการ"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+
+                <div className="flex-1 w-full space-y-2">
+                  <label className="block text-[10px] font-semibold text-stone-500 uppercase tracking-wider">รายละเอียด (รายการที่ {index + 1})</label>
+                  <input
+                    type="text"
+                    required
+                    value={item.description}
+                    onChange={(e) => {
+                      const newItems = [...requestItems];
+                      newItems[index].description = e.target.value;
+                      setRequestItems(newItems);
+                    }}
+                    placeholder="ระบุจุดประสงค์..."
+                    className="w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-stone-900 text-sm focus:outline-none focus:ring-1 focus:ring-stone-950"
+                  />
+                </div>
+
+                <div className="w-full sm:w-48 space-y-2 shrink-0">
+                  <label className="block text-[10px] font-semibold text-stone-500 uppercase tracking-wider">หมวดหมู่</label>
+                  <select
+                    value={item.category}
+                    onChange={(e) => {
+                      const newItems = [...requestItems];
+                      newItems[index].category = e.target.value;
+                      setRequestItems(newItems);
+                    }}
+                    className="w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-stone-900 text-sm focus:outline-none focus:ring-1 focus:ring-stone-950"
+                  >
+                    {settings?.categories.map((cat) => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="w-full sm:w-40 space-y-2 shrink-0">
+                  <label className="block text-[10px] font-semibold text-stone-500 uppercase tracking-wider">ยอดเงิน (บาท)</label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      step="0.01"
+                      value={item.amount || ""}
+                      onChange={(e) => {
+                        const newItems = [...requestItems];
+                        newItems[index].amount = parseFloat(e.target.value) || 0;
+                        setRequestItems(newItems);
+                      }}
+                      placeholder="0.00"
+                      className="w-full pl-7 pr-3 py-2 bg-white border border-stone-200 rounded-lg text-stone-900 text-sm font-mono font-bold focus:outline-none focus:ring-1 focus:ring-stone-950 text-right"
+                    />
+                    <div className="absolute inset-y-0 left-2.5 flex items-center pointer-events-none text-stone-400 font-bold text-xs">
+                      ฿
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
+            ))}
+          </div>
 
+          <div className="flex flex-col sm:flex-row justify-between p-4 bg-stone-50 border border-stone-200 rounded-xl mt-4 items-start sm:items-center gap-4">
             <div>
               <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-2">
                 วันที่กำหนดเคลียร์บิลภายใน
@@ -718,62 +839,154 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
                 }) : "-"} (ระบุอัตโนมัติ 30 วัน)
               </span>
             </div>
+            
+            <div className="sm:text-right w-full sm:w-auto p-3 sm:p-0 bg-white sm:bg-transparent rounded-lg border sm:border-0 border-stone-200">
+              <span className="text-sm font-semibold text-stone-600 block mb-1">ยอดเงินขอเบิกรวมสุทธิ:</span>
+              <span className="text-2xl font-mono font-black text-emerald-600">฿ {requestAmount.toLocaleString("th-TH", { minimumFractionDigits: 2 })}</span>
+            </div>
           </div>
         </div>
 
-        {/* Attachment Mock File Selector / Link input */}
+        {/* Custom Transfer Account Section */}
+        <div className="pt-4 border-t border-stone-100">
+          <div className="flex items-center gap-3 mb-4">
+            <input
+              type="checkbox"
+              id="useCustomAccount"
+              checked={useCustomAccount}
+              onChange={(e) => {
+                setUseCustomAccount(e.target.checked);
+                if (!e.target.checked) {
+                  setCustomBankName("");
+                  setCustomAccountNo("");
+                  setCustomAccountName("");
+                }
+              }}
+              className="w-4 h-4 rounded text-stone-900 border-stone-300 focus:ring-stone-900"
+            />
+            <label htmlFor="useCustomAccount" className="text-sm font-semibold text-stone-700 cursor-pointer select-none">
+              ต้องการให้โอนเงินเข้าบัญชีอื่น (เช่น บัญชีร้านค้า หรือ ซัพพลายเออร์) แทนบัญชีพนักงาน
+            </label>
+          </div>
+
+          {useCustomAccount && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-stone-50 p-5 rounded-2xl border border-stone-200">
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider">ธนาคาร *</label>
+                <select
+                  required={useCustomAccount}
+                  value={customBankName}
+                  onChange={(e) => setCustomBankName(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-stone-900 text-sm focus:outline-none focus:ring-1 focus:ring-stone-950"
+                >
+                  <option value="">เลือกธนาคาร</option>
+                  <option value="ธนาคารกสิกรไทย (KBANK)">ธนาคารกสิกรไทย (KBANK)</option>
+                  <option value="ธนาคารไทยพาณิชย์ (SCB)">ธนาคารไทยพาณิชย์ (SCB)</option>
+                  <option value="ธนาคารกรุงเทพ (BBL)">ธนาคารกรุงเทพ (BBL)</option>
+                  <option value="ธนาคารกรุงไทย (KTB)">ธนาคารกรุงไทย (KTB)</option>
+                  <option value="ธนาคารกรุงศรีอยุธยา (BAY)">ธนาคารกรุงศรีอยุธยา (BAY)</option>
+                  <option value="ธนาคารทหารไทยธนชาต (TTB)">ธนาคารทหารไทยธนชาต (TTB)</option>
+                  <option value="ธนาคารออมสิน (GSB)">ธนาคารออมสิน (GSB)</option>
+                  <option value="อื่นๆ">อื่นๆ</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider">เลขที่บัญชี *</label>
+                <input
+                  type="text"
+                  required={useCustomAccount}
+                  value={customAccountNo}
+                  onChange={(e) => setCustomAccountNo(e.target.value)}
+                  placeholder="เช่น 012-3-45678-9"
+                  className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-stone-900 font-mono text-sm focus:outline-none focus:ring-1 focus:ring-stone-950"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider">ชื่อบัญชี *</label>
+                <input
+                  type="text"
+                  required={useCustomAccount}
+                  value={customAccountName}
+                  onChange={(e) => setCustomAccountName(e.target.value)}
+                  placeholder="เช่น บจก. ซัพพลายเออร์"
+                  className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-stone-900 text-sm focus:outline-none focus:ring-1 focus:ring-stone-950"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Multiple Attachments Section */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-stone-100">
           <div>
             <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-2">
-              แนบเอกสารใบเสนอราคา หรือ เอกสารประมาณการค่าใช้จ่าย (URL รูปภาพประกอบ)
+              แนบเอกสารใบเสนอราคา หรือ เอกสารประกอบ (อัปโหลดได้หลายไฟล์)
             </label>
             <input
               type="file"
+              multiple
               ref={fileInputRef}
               onChange={handleFileChange}
               accept=".jpg,.jpeg,.png,.pdf"
               className="hidden"
             />
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="flex-1 px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-600 text-sm flex items-center justify-center sm:justify-start gap-2 hover:bg-stone-100 transition"
-              >
-                <FileText className="w-4 h-4" />
-                {attachmentUrl ? "เปลี่ยนไฟล์ที่แนบ" : "แนบไฟล์ PDF หรือ รูปภาพ"}
-              </button>
-              {attachmentUrl && (
-                <button
-                  type="button"
-                  onClick={() => setPreviewImage(attachmentUrl.split(',')[0])}
-                  className="px-4 py-2.5 bg-stone-900 text-stone-100 rounded-xl hover:bg-stone-800 transition flex items-center justify-center shrink-0"
-                  title="ดูตัวอย่างเอกสาร"
-                >
-                  <Eye className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-            {attachmentUrl && (
-              <p className="text-[10px] text-emerald-600 mt-1 truncate">
-                แนบไฟล์สำเร็จแล้ว: {attachmentUrl.substring(0, 20)}...
-              </p>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full px-4 py-3 bg-stone-50 border-2 border-dashed border-stone-200 hover:border-stone-400 rounded-2xl text-stone-500 text-sm flex items-center justify-center gap-2 transition-all hover:bg-stone-100"
+            >
+              <Plus className="w-5 h-5" />
+              <span>คลิกเพื่อแนบไฟล์เอกสาร (PDF หรือ รูปภาพ)</span>
+            </button>
+
+            {/* Attachment List */}
+            {attachments.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">ไฟล์ที่แนบแล้ว ({attachments.length} รายการ)</p>
+                <div className="grid grid-cols-1 gap-2">
+                  {attachments.map((file, idx) => (
+                    <div key={idx} className="flex items-center justify-between p-2.5 bg-stone-50 border border-stone-200 rounded-xl group">
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        <div className="w-8 h-8 bg-white border border-stone-100 rounded-lg flex items-center justify-center shrink-0">
+                          <FileText className="w-4 h-4 text-stone-400" />
+                        </div>
+                        <span className="text-[11px] font-bold text-stone-700 truncate">{file.name}</span>
+                      </div>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          onClick={() => setPreviewImage(file.url)}
+                          className="p-1.5 text-stone-400 hover:text-stone-900 transition"
+                          title="ดูตัวอย่าง"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeAttachment(idx)}
+                          className="p-1.5 text-stone-400 hover:text-red-600 transition"
+                          title="ลบออก"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
-            <p className="text-[10px] text-stone-400 mt-1">
-              (ถ้าไม่มี สามารถใช้ URL ว่าง หรือรูปภาพทดสอบใดๆ)
-            </p>
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-2">
               หมายเหตุเพิ่มเติม
             </label>
-            <input
-              type="text"
-              placeholder="ระบุข้อมูลเพิ่มเติมถ้ามี"
+            <textarea
+              rows={4}
+              placeholder="ระบุข้อมูลเพิ่มเติมถ้ามี..."
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 text-sm focus:outline-none focus:ring-1 focus:ring-stone-950"
+              className="w-full px-4 py-3 bg-stone-50 border border-stone-200 rounded-2xl text-stone-900 text-sm focus:outline-none focus:ring-1 focus:ring-stone-950 resize-none"
             />
           </div>
         </div>
@@ -835,55 +1048,28 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
                 </div>
               </div>
 
-              {/* Category */}
-              <div>
-                <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1.5">
-                  หมวดหมู่ค่าใช้จ่าย
-                </label>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 text-xs focus:outline-none focus:ring-1 focus:ring-stone-950"
-                >
-                  {settings?.categories.map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Request Amount */}
-              <div>
-                <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1.5">
-                  ยอดเงินขอเบิก (บาท)
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={requestAmount || ""}
-                    onChange={(e) => setRequestAmount(parseFloat(e.target.value) || 0)}
-                    className="w-full pl-8 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 text-xs font-mono font-bold focus:outline-none focus:ring-1 focus:ring-stone-950"
-                  />
-                  <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-stone-500 font-bold text-xs">
-                    ฿
-                  </div>
-                </div>
-              </div>
-
-              {/* Details */}
+              {/* Request Items */}
               <div className="md:col-span-2">
                 <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1.5">
-                  รายละเอียดเหตุผลการขอเบิกเงิน
+                  รายการเบิกเงิน
                 </label>
-                <textarea
-                  rows={3}
-                  value={details}
-                  onChange={(e) => setDetails(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 text-xs focus:outline-none focus:ring-1 focus:ring-stone-950 resize-none"
-                />
+                <div className="space-y-2">
+                  {requestItems.map((item, idx) => (
+                    <div key={idx} className="flex flex-col sm:flex-row justify-between bg-stone-50 border border-stone-200 p-3 rounded-xl gap-2">
+                      <div className="flex-1">
+                        <p className="text-xs font-bold text-stone-900">{item.description}</p>
+                        <p className="text-[10px] text-stone-500">{item.category}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-mono font-bold text-emerald-600">฿ {item.amount.toLocaleString("th-TH", { minimumFractionDigits: 2 })}</p>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="flex justify-between items-center px-2 pt-2 border-t border-stone-100">
+                    <span className="text-xs font-bold text-stone-700">ยอดรวมทั้งหมด</span>
+                    <span className="text-base font-mono font-black text-emerald-700">฿ {requestAmount.toLocaleString("th-TH", { minimumFractionDigits: 2 })}</span>
+                  </div>
+                </div>
               </div>
 
               {/* Needed Date */}
@@ -911,6 +1097,28 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
                   className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 text-xs focus:outline-none focus:ring-1 focus:ring-stone-950"
                 />
               </div>
+
+              {useCustomAccount && (
+                <div className="md:col-span-2 mt-2 p-4 bg-blue-50 border border-blue-100 rounded-xl">
+                  <label className="block text-xs font-bold text-blue-900 uppercase tracking-wider mb-2">
+                    โอนเข้าบัญชีอื่น (ไม่ใช่บัญชีพนักงาน)
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div>
+                      <p className="text-[10px] text-blue-700 font-semibold mb-1">ธนาคาร</p>
+                      <p className="text-xs text-blue-950 font-bold">{customBankName || "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-blue-700 font-semibold mb-1">เลขที่บัญชี</p>
+                      <p className="text-xs text-blue-950 font-bold font-mono">{customAccountNo || "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-blue-700 font-semibold mb-1">ชื่อบัญชี</p>
+                      <p className="text-xs text-blue-950 font-bold">{customAccountName || "-"}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Error in modal */}

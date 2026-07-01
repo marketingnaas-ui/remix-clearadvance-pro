@@ -118,7 +118,7 @@ export default function ProfileSettings({ currentEmployee, onProfileUpdate }: Pr
     reader.onload = (event) => {
       const img = document.createElement("img");
       img.onload = () => {
-        const maxDim = 1600;
+        const maxDim = 900;
         let width = img.width;
         let height = img.height;
         
@@ -142,6 +142,7 @@ export default function ProfileSettings({ currentEmployee, onProfileUpdate }: Pr
         }
 
         ctx.drawImage(img, 0, 0, width, height);
+        const fallbackDataUrl = canvas.toDataURL("image/jpeg", 0.76);
         canvas.toBlob(
           async (blob) => {
             if (!blob) {
@@ -170,12 +171,34 @@ export default function ProfileSettings({ currentEmployee, onProfileUpdate }: Pr
               }
             } catch (error) {
               console.error("Error uploading profile image:", error);
+              try {
+                const fallbackUpdatedAt = { seconds: Math.floor(Date.now() / 1000) };
+                const employeeRef = doc(db, "employees", currentEmployee.id);
+                await updateDoc(employeeRef, {
+                  profilePhotoURL: "",
+                  profileImage: fallbackDataUrl,
+                  profilePhotoUpdatedAt: fallbackUpdatedAt,
+                });
+                setProfileImage(fallbackDataUrl);
+                onProfileUpdate({
+                  ...currentEmployee,
+                  profilePhotoURL: "",
+                  profileImage: fallbackDataUrl,
+                  profilePhotoUpdatedAt: fallbackUpdatedAt,
+                });
+                setSaving(false);
+                setSuccess("Saved profile image in Vercel fallback mode");
+                return;
+              } catch (fallbackError) {
+                console.error("Firestore fallback profile upload failed:", fallbackError);
+              }
+              setProfileImage(fallbackDataUrl);
               setSaving(false);
               setError("ไม่สามารถอัปโหลดรูปภาพไปยังเซิร์ฟเวอร์ได้");
             }
           },
           "image/jpeg",
-          0.9
+          0.76
         );
       };
       img.src = event.target?.result as string;
