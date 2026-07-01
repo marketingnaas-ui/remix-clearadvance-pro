@@ -1,10 +1,11 @@
 export interface LineNotificationPayload {
-  triggerId: "onNewRequest" | "onManagerApproval" | "onClearanceSubmitted" | "onSettlement";
-  variables: {
-    advId: string;
-    employeeName: string;
-    amount: string;
-    status: string;
+  triggerId: string;
+  variables: Record<string, string | number | boolean | null | undefined> & {
+    advId?: string;
+    employeeId?: string;
+    employeeName?: string;
+    amount?: string | number;
+    status?: string;
     projectName?: string;
     category?: string;
     remark?: string;

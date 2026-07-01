@@ -82,6 +82,186 @@ if (!fs.existsSync(PROFILES_DIR)) {
 
 const upload = multer({ storage: multer.memoryStorage() });
 
+const formatThaiDate = (value?: any) => {
+  if (!value) return new Date().toLocaleDateString("th-TH");
+  const date = typeof value?.toDate === "function" ? value.toDate() : new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString("th-TH");
+};
+
+const formatMoney = (value?: any) => {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return String(value || "0");
+  return `${amount.toLocaleString("th-TH", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} บาท`;
+};
+
+const shortMoney = (value?: any) => {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return "0";
+  if (Math.abs(amount) >= 1_000_000) return `${(amount / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (Math.abs(amount) >= 1_000) return `${(amount / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  return amount.toLocaleString("th-TH");
+};
+
+const getDocByIdOrField = async (collectionName: string, idOrValue?: string, fieldName?: string) => {
+  if (!firestoreDb || !idOrValue) return null;
+  const byId = await firestoreDb.collection(collectionName).doc(idOrValue).get();
+  if (byId.exists) return { id: byId.id, ...byId.data() };
+  if (!fieldName) return null;
+  const snap = await firestoreDb.collection(collectionName).where(fieldName, "==", idOrValue).limit(1).get();
+  if (snap.empty) return null;
+  const docSnap = snap.docs[0];
+  return { id: docSnap.id, ...docSnap.data() };
+};
+
+const replaceVariables = (template: string, vars: Record<string, any>): string => {
+  let result = template || "";
+  for (const [key, val] of Object.entries(vars)) {
+    result = result.replace(new RegExp(`{${key}}`, "g"), String(val ?? ""));
+  }
+  return result;
+};
+
+const replaceVariablesInObject = (obj: any, vars: Record<string, any>): any => {
+  if (typeof obj === "string") return replaceVariables(obj, vars);
+  if (Array.isArray(obj)) return obj.map((item) => replaceVariablesInObject(item, vars));
+  if (obj !== null && typeof obj === "object") {
+    return Object.fromEntries(Object.entries(obj).map(([key, value]) => [key, replaceVariablesInObject(value, vars)]));
+  }
+  return obj;
+};
+
+const parseLineTemplate = (template: any) => {
+  if (typeof template !== "string") return template;
+  return JSON.parse(template);
+};
+
+const createLineMessagePayload = (trigger: any, variables: Record<string, any>) => {
+  if (trigger.type === "flex") {
+    const templateJson = parseLineTemplate(trigger.messageTemplate);
+    const resolvedJson = replaceVariablesInObject(templateJson, variables);
+    const contents = resolvedJson?.type === "flex" && resolvedJson.contents
+      ? resolvedJson.contents
+      : resolvedJson?.contents || resolvedJson;
+    const payload: any = {
+      type: "flex",
+      altText: replaceVariables(trigger.altText || "ClearAdvance แจ้งเตือน {advId}", variables),
+      contents,
+    };
+    if (resolvedJson?.quickReply) payload.quickReply = resolvedJson.quickReply;
+    return payload;
+  }
+  return {
+    type: "text",
+    text: replaceVariables(trigger.messageTemplate || "", variables),
+  };
+};
+
+const getLineSettings = async () => {
+  const settingsSnap = await firestoreDb.collection("settings").doc("global").get();
+  if (!settingsSnap.exists) return null;
+  return settingsSnap.data()?.lineMessagingConfig || null;
+};
+
+const buildLiffUrl = (lineConfig: any, advId?: string) => {
+  const params = new URLSearchParams();
+  if (advId) params.set("adv_id", advId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  if (lineConfig?.liffId) return `https://liff.line.me/${lineConfig.liffId}${suffix}`;
+  const baseUrl = process.env.APP_URL || process.env.PUBLIC_APP_URL || process.env.VITE_APP_URL || "http://localhost:3002";
+  return `${baseUrl.replace(/\/$/, "")}/liff/upload-slip${suffix}`;
+};
+
+const enrichLineVariables = async (inputVariables: Record<string, any>, lineConfig: any) => {
+  const variables: Record<string, any> = { ...(inputVariables || {}) };
+  const advId = variables.advId || variables.advanceId || variables.id;
+  const advance: any = await getDocByIdOrField("advances", advId, "advId");
+  if (advance) {
+    variables.advId = variables.advId || advance.advId || advance.advanceNo || advance.id;
+    variables.employeeId = variables.employeeId || advance.employeeId || advance.requesterId || advance.userId;
+    variables.projectId = variables.projectId || advance.projectId;
+    variables.projectName = variables.projectName || advance.projectName || advance.project;
+    variables.category = variables.category || advance.category || advance.expenseCategory || advance.expenseType;
+    variables.status = variables.status || advance.status;
+    variables.remark = variables.remark || advance.remark || advance.reason || advance.description;
+    variables.amount = variables.amount || advance.amount || advance.totalAmount || advance.advanceAmount;
+    variables.date = variables.date || formatThaiDate(advance.createdAt || advance.requestDate || advance.date);
+    variables.neededDate = variables.neededDate || formatThaiDate(advance.neededDate || advance.dueDate || advance.clearanceDueDate);
+    variables.profileImageUrl = variables.profileImageUrl || advance.profileImageUrl || advance.profilePhotoURL;
+  }
+
+  const employee: any = await getDocByIdOrField("employees", variables.employeeId || variables.targetEmployeeId, "employeeId");
+  if (employee) {
+    variables.employeeName = variables.employeeName || employee.name || employee.fullName || `${employee.firstName || ""} ${employee.lastName || ""}`.trim();
+    variables.profileImageUrl = variables.profileImageUrl || employee.profilePhotoURL || employee.photoURL || employee.avatarUrl;
+    variables.bankAccountNo = variables.bankAccountNo || employee.bankAccountNo || employee.bankAccountNumber || employee.accountNumber;
+    variables.bankName = variables.bankName || employee.bankName || employee.bank;
+  }
+
+  const project: any = await getDocByIdOrField("projects", variables.projectId, "projectId");
+  if (project) variables.projectName = variables.projectName || project.name || project.projectName || project.title;
+
+  const advSnap = await firestoreDb.collection("advances").get();
+  let outstandingTotal = 0;
+  let totalAdvance = 0;
+  let closedTotal = 0;
+  let waitingApprovalCount = 0;
+  let waitingClearanceCount = 0;
+  advSnap.forEach((docSnap: any) => {
+    const adv = docSnap.data();
+    const amount = Number(adv.amount || adv.totalAmount || adv.advanceAmount || 0);
+    const status = String(adv.status || "").toLowerCase();
+    totalAdvance += amount;
+    if (["approved", "transferred", "pending_clearance", "waiting_clearance", "clearing"].some((s) => status.includes(s))) {
+      outstandingTotal += Number(adv.outstandingAmount ?? amount);
+    }
+    if (["closed", "settled", "completed"].some((s) => status.includes(s))) closedTotal += amount;
+    if (["pending", "submitted", "approval"].some((s) => status.includes(s)) && !status.includes("approved")) waitingApprovalCount += 1;
+    if (["clearance", "transferred"].some((s) => status.includes(s)) && !["closed", "settled", "completed"].some((s) => status.includes(s))) waitingClearanceCount += 1;
+  });
+
+  variables.amount = typeof variables.amount === "number" ? formatMoney(variables.amount) : variables.amount || formatMoney(0);
+  variables.clearingAmount = variables.clearingAmount || variables.clearanceAmount || formatMoney(variables.amountValue || 0);
+  variables.settlementAmount = variables.settlementAmount || variables.settlementResult || formatMoney(0);
+  variables.rejectReason = variables.rejectReason || variables.reason || variables.remark || "กรุณาตรวจสอบและแก้ไขข้อมูลก่อนส่งอนุมัติอีกครั้ง";
+  variables.liffSlipUrl = variables.liffSlipUrl || buildLiffUrl(lineConfig, variables.advId);
+  variables.profileImageUrl = variables.profileImageUrl || "https://placehold.co/320x320/png?text=Profile";
+  variables.outstandingShort = variables.outstandingShort || shortMoney(outstandingTotal);
+  variables.totalAdvanceShort = variables.totalAdvanceShort || shortMoney(totalAdvance);
+  variables.closedAmountShort = variables.closedAmountShort || shortMoney(closedTotal);
+  variables.date = variables.date || formatThaiDate();
+  variables.neededDate = variables.neededDate || "-";
+  variables.dateRange = variables.dateRange || formatThaiDate();
+  variables.outstandingAmount = variables.outstandingAmount || formatMoney(outstandingTotal);
+  variables.waitingApprovalCount = variables.waitingApprovalCount ?? String(waitingApprovalCount);
+  variables.waitingClearanceCount = variables.waitingClearanceCount ?? String(waitingClearanceCount);
+  variables.dailySummary = variables.dailySummary || `วันนี้มีรายการรออนุมัติ ${waitingApprovalCount} รายการ และรอเคลียร์ ${waitingClearanceCount} รายการ`;
+  variables.weeklySummary = variables.weeklySummary || `สัปดาห์นี้ยอดเงินทดรองสะสม ${formatMoney(totalAdvance)} ปิดยอดแล้ว ${formatMoney(closedTotal)}`;
+  variables.outstandingSummary = variables.outstandingSummary || `ยอดคงค้างรวม ${formatMoney(outstandingTotal)} จากรายการที่ยังไม่ปิดยอด`;
+  return variables;
+};
+
+const selectLineRecipients = (allEmployees: any[], trigger: any, variables: Record<string, any>, targetEmployeeId?: string) => {
+  const recipientIdsSet = new Set<string>();
+  const mode = trigger.recipientMode || "target";
+  const targetIds = new Set([targetEmployeeId, variables.targetEmployeeId, variables.employeeId, variables.requesterId].filter(Boolean).map(String));
+  const roles = new Set<string>(trigger.recipientRoles || []);
+  const accountingRoles = new Set(["Accountant", "Accounting", "Admin"]);
+  const approverRoles = roles.size ? roles : new Set(["Manager", "Admin"]);
+
+  allEmployees.forEach((emp) => {
+    if (!emp.lineUserId) return;
+    const empIds = [emp.id, emp.employeeId, emp.uid, emp.userId].filter(Boolean).map(String);
+    const isTarget = empIds.some((id) => targetIds.has(id));
+    if (mode === "all") recipientIdsSet.add(emp.lineUserId);
+    if (mode === "target" && isTarget) recipientIdsSet.add(emp.lineUserId);
+    if (mode === "requester" && isTarget) recipientIdsSet.add(emp.lineUserId);
+    if (mode === "accounting" && accountingRoles.has(emp.role)) recipientIdsSet.add(emp.lineUserId);
+    if (mode === "approvers" && approverRoles.has(emp.role)) recipientIdsSet.add(emp.lineUserId);
+  });
+
+  return Array.from(recipientIdsSet);
+};
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
@@ -243,7 +423,7 @@ async function startServer() {
   // API Route for LINE Notifications using real LINE Messaging API
   app.post("/api/line/send-notification", async (req, res) => {
     try {
-      const { triggerId, variables, targetEmployeeId } = req.body;
+      const { triggerId, variables = {}, targetEmployeeId } = req.body;
       if (!triggerId || !variables) {
         return res.status(400).json({ error: "Missing triggerId or variables in request body." });
       }
@@ -254,41 +434,11 @@ async function startServer() {
         return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
       }
 
-      // Helper function to replace template placeholders
-      const replaceVariables = (template: string, vars: Record<string, any>): string => {
-        let result = template;
-        for (const [key, val] of Object.entries(vars)) {
-          result = result.replace(new RegExp(`{${key}}`, "g"), String(val ?? ""));
-        }
-        return result;
-      };
-
-      // Helper function to replace variables in an object structure (for Flex JSON)
-      const replaceVariablesInObject = (obj: any, vars: Record<string, any>): any => {
-        if (typeof obj === "string") {
-          return replaceVariables(obj, vars);
-        }
-        if (Array.isArray(obj)) {
-          return obj.map(item => replaceVariablesInObject(item, vars));
-        }
-        if (obj !== null && typeof obj === "object") {
-          const newObj: any = {};
-          for (const [key, value] of Object.entries(obj)) {
-            newObj[key] = replaceVariablesInObject(value, vars);
-          }
-          return newObj;
-        }
-        return obj;
-      };
-
       // 1. Get LINE Messaging config from settings/global
-      const settingsSnap = await firestoreDb.collection("settings").doc("global").get();
-      if (!settingsSnap.exists) {
+      const lineConfig = await getLineSettings();
+      if (!lineConfig) {
         return res.status(404).json({ error: "Global settings document not found." });
       }
-
-      const settingsData = settingsSnap.data();
-      const lineConfig = settingsData.lineMessagingConfig;
 
       if (!lineConfig || !lineConfig.channelAccessToken) {
         console.warn("LINE Notifications are not configured yet (no Channel Access Token).");
@@ -309,58 +459,16 @@ async function startServer() {
         return res.json({ status: "skipped", message: `Trigger "${triggerId}" is inactive.` });
       }
 
+      const resolvedVariables = await enrichLineVariables({ ...variables, targetEmployeeId }, lineConfig);
+
       // 2. Fetch recipients (lineUserIds) from employees in memory (safest, no composite indices needed)
-      const recipientIdsSet = new Set<string>();
       const empSnap = await firestoreDb.collection("employees").get();
       const allEmployees: any[] = [];
       empSnap.forEach((docSnap: any) => {
         allEmployees.push({ id: docSnap.id, ...docSnap.data() });
       });
 
-      // Target criteria based on trigger type
-      if (triggerId === "onNewRequest") {
-        // Notify managers, administrators, and accounting team
-        allEmployees.forEach(emp => {
-          if (emp.lineUserId && (emp.role === "Manager" || emp.role === "Admin" || emp.role === "Accountant" || emp.role === "Accounting")) {
-            recipientIdsSet.add(emp.lineUserId);
-          }
-        });
-      } else if (triggerId === "onManagerApproval") {
-        // Notify the requester and accounting/admin teams
-        allEmployees.forEach(emp => {
-          if (emp.lineUserId) {
-            if (emp.id === targetEmployeeId || emp.role === "Accountant" || emp.role === "Accounting" || emp.role === "Admin") {
-              recipientIdsSet.add(emp.lineUserId);
-            }
-          }
-        });
-      } else if (triggerId === "onClearanceSubmitted") {
-        // Notify managers, administrators, and accounting team
-        allEmployees.forEach(emp => {
-          if (emp.lineUserId && (emp.role === "Manager" || emp.role === "Admin" || emp.role === "Accountant" || emp.role === "Accounting")) {
-            recipientIdsSet.add(emp.lineUserId);
-          }
-        });
-      } else if (triggerId === "onSettlement") {
-        // Notify the requester
-        allEmployees.forEach(emp => {
-          if (emp.lineUserId) {
-            if (emp.id === targetEmployeeId || emp.role === "Admin") {
-              recipientIdsSet.add(emp.lineUserId);
-            }
-          }
-        });
-      } else {
-        // Default: If specific targetEmployeeId provided, notify them
-        if (targetEmployeeId) {
-          const targetEmp = allEmployees.find(emp => emp.id === targetEmployeeId);
-          if (targetEmp?.lineUserId) {
-            recipientIdsSet.add(targetEmp.lineUserId);
-          }
-        }
-      }
-
-      const recipients = Array.from(recipientIdsSet);
+      const recipients = selectLineRecipients(allEmployees, trigger, resolvedVariables, targetEmployeeId);
       if (recipients.length === 0) {
         console.log("No recipients found with a registered LINE User ID.");
         return res.json({ status: "skipped", message: "No employees have a registered LINE User ID." });
@@ -369,38 +477,13 @@ async function startServer() {
       // 3. Format Message
       let messagePayload: any = null;
 
-      if (trigger.type === "flex") {
-        try {
-          // Parse string template to JSON
-          let templateJson = trigger.messageTemplate;
-          if (typeof templateJson === "string") {
-            try {
-              templateJson = JSON.parse(templateJson);
-            } catch {
-              // It was just a raw string, not a valid stringified JSON
-            }
-          }
-          const resolvedJson = replaceVariablesInObject(templateJson, variables);
-          messagePayload = {
-            type: "flex",
-            altText: "ClearAdvance PRO แจ้งเตือนสถานะใบเบิกเงิน",
-            contents: resolvedJson
-          };
-        } catch (jsonErr: any) {
-          console.error("Failed to parse or resolve Flex Message JSON template:", jsonErr);
-          // Fallback to text message
-          const textMsg = replaceVariables(trigger.messageTemplate, variables);
-          messagePayload = {
-            type: "text",
-            text: `[Flex Template Parse Error. Fallback Text]\n\n${textMsg}`
-          };
-        }
-      } else {
-        // Default to Text
-        const textMsg = replaceVariables(trigger.messageTemplate, variables);
+      try {
+        messagePayload = createLineMessagePayload(trigger, resolvedVariables);
+      } catch (jsonErr: any) {
+        console.error("Failed to parse or resolve LINE message template:", jsonErr);
         messagePayload = {
           type: "text",
-          text: textMsg
+          text: `[Template Parse Error]\n${replaceVariables(trigger.messageTemplate || "", resolvedVariables)}`
         };
       }
 
@@ -429,10 +512,72 @@ async function startServer() {
         }
       }
 
-      return res.json({ status: "success", recipientsSent: recipients.length, results });
+      return res.json({ status: "success", recipientsSent: recipients.length, variables: resolvedVariables, results });
     } catch (err: any) {
       console.error("Send LINE Notification error:", err);
       return res.status(500).json({ error: err.message || "Internal server error during notification dispatch." });
+    }
+  });
+
+  app.post("/api/line/webhook", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const lineConfig = await getLineSettings();
+      if (!lineConfig?.channelAccessToken) return res.status(200).json({ status: "skipped", message: "LINE Messaging is not configured." });
+
+      const events = Array.isArray(req.body?.events) ? req.body.events : [];
+      const triggers = lineConfig.triggers || [];
+      const replies: any[] = [];
+
+      for (const event of events) {
+        if (!event.replyToken) continue;
+        const data = new URLSearchParams(event.postback?.data || event.message?.text || "");
+        let triggerId = "";
+        let variables: Record<string, any> = {};
+
+        if (data.get("report")) {
+          const report = data.get("report");
+          triggerId = report === "daily" ? "dailyReport" : report === "weekly" ? "weeklyReport" : "outstandingReport";
+        } else if (data.get("action")) {
+          const action = data.get("action");
+          const advId = data.get("id") || "";
+          variables = { advId };
+          if (advId) {
+            const advance: any = await getDocByIdOrField("advances", advId, "advId");
+            if (advance?.id) {
+              await firestoreDb.collection("advances").doc(advance.id).set({
+                status: action === "approve" ? "APPROVED" : "REJECTED",
+                lineActionAt: FieldValue.serverTimestamp(),
+                lineActionBy: event.source?.userId || "",
+              }, { merge: true });
+            }
+          }
+          triggerId = action === "approve" ? "onManagerApproval" : "onReject";
+        }
+
+        const trigger = triggers.find((t: any) => t.id === triggerId && t.isActive);
+        if (!trigger) continue;
+        const resolvedVariables = await enrichLineVariables(variables, lineConfig);
+        const messagePayload = createLineMessagePayload(trigger, resolvedVariables);
+
+        const lineRes = await fetch("https://api.line.me/v2/bot/message/reply", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${lineConfig.channelAccessToken}`
+          },
+          body: JSON.stringify({
+            replyToken: event.replyToken,
+            messages: [messagePayload]
+          })
+        });
+        replies.push({ triggerId, status: lineRes.status, response: await lineRes.text() });
+      }
+
+      return res.json({ status: "success", replies });
+    } catch (err: any) {
+      console.error("LINE webhook error:", err);
+      return res.status(500).json({ error: err.message || "Internal server error during LINE webhook." });
     }
   });
 

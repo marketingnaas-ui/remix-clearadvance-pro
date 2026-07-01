@@ -85,6 +85,9 @@ export interface LineMessageTrigger {
   isActive: boolean;
   messageTemplate: string;
   type?: "text" | "flex";
+  altText?: string;
+  recipientMode?: "approvers" | "requester" | "accounting" | "all" | "target";
+  recipientRoles?: UserRole[];
 }
 
 interface ApprovalConditionRule {
@@ -97,21 +100,145 @@ interface ApprovalConditionRule {
 }
 
 const LINE_VARIABLES = [
-  { name: "{advId}", desc: "รหัสใบเบิก (เช่น ADV-2401-001)" },
-  { name: "{employeeName}", desc: "ชื่อพนักงานที่ทำรายการ" },
-  { name: "{amount}", desc: "จำนวนเงินรวม" },
-  { name: "{status}", desc: "สถานะปัจจุบันของรายการ" },
+  { name: "{advId}", desc: "เลข ADV / เลขเอกสาร" },
+  { name: "{employeeName}", desc: "ชื่อผู้ขอเบิก" },
+  { name: "{amount}", desc: "ยอดเงินรวม" },
+  { name: "{status}", desc: "สถานะปัจจุบัน" },
   { name: "{projectName}", desc: "ชื่อโครงการ" },
   { name: "{category}", desc: "หมวดหมู่ค่าใช้จ่าย" },
-  { name: "{remark}", desc: "หมายเหตุ" },
+  { name: "{remark}", desc: "เหตุผลหรือรายละเอียด" },
   { name: "{date}", desc: "วันที่ทำรายการ" },
+  { name: "{neededDate}", desc: "กำหนดใช้เงิน/กำหนดเคลียร์" },
+  { name: "{rejectReason}", desc: "เหตุผลที่ไม่อนุมัติ" },
+  { name: "{liffSlipUrl}", desc: "ลิงก์ LIFF สำหรับแนบสลิป" },
+  { name: "{profileImageUrl}", desc: "รูปโปรไฟล์ผู้ขอเบิก" },
+  { name: "{outstandingAmount}", desc: "ยอดคงค้างรวม" },
+  { name: "{waitingApprovalCount}", desc: "จำนวนรายการรออนุมัติ" },
+  { name: "{waitingClearanceCount}", desc: "จำนวนรายการรอเคลียร์" },
+  { name: "{dailySummary}", desc: "สรุปรายงานประจำวัน" },
+  { name: "{weeklySummary}", desc: "สรุปรายงานประจำสัปดาห์" },
+  { name: "{outstandingSummary}", desc: "สรุปรายการคงค้าง" },
 ];
 
-const DEFAULT_LINE_TRIGGERS: LineMessageTrigger[] = [
-  { id: "onNewRequest", name: "เมื่อพนักงานยื่นเรื่องขอเบิกใหม่ (รออนุมัติ)", isActive: true, messageTemplate: "มีรายการขอเบิกเงินใหม่\nรหัส: {advId}\nผู้ขอเบิก: {employeeName}\nยอดเงิน: {amount} บาท", type: "text" },
-  { id: "onManagerApproval", name: "เมื่อหัวหน้างานอนุมัติ", isActive: true, messageTemplate: "รายการ {advId} อนุมัติแล้ว\nรอตรวจสอบจากบัญชี", type: "text" },
-  { id: "onClearanceSubmitted", name: "เมื่อพนักงานส่งเอกสารเคลียร์ยอด", isActive: true, messageTemplate: "รายการ {advId} ส่งเอกสารเคลียร์ยอดแล้ว", type: "text" },
-  { id: "onSettlement", name: "เมื่อบัญชีปิดยอด Settlement", isActive: true, messageTemplate: "รายการ {advId} ปิดยอดเรียบร้อยแล้ว\nโอนเงินสำเร็จ", type: "text" }
+const stringifyFlex = (contents: any) => JSON.stringify(contents, null, 2);
+
+const infoRow = (label: string, value: string, color = "#2E2E2E") => ({
+  type: "box",
+  layout: "horizontal",
+  contents: [
+    { type: "text", text: label, size: "sm", color: "#9A8477", flex: 3 },
+    { type: "text", text: value, size: "sm", color, weight: "bold", flex: 7, align: "end", wrap: true },
+  ],
+});
+
+const approvalRequestFlex = () => ({
+  type: "bubble",
+  size: "mega",
+  header: {
+    type: "box",
+    layout: "vertical",
+    backgroundColor: "#00A5E0",
+    paddingAll: "16px",
+    contents: [
+      { type: "text", text: "{advId}", weight: "bold", size: "xl", color: "#FFFFFF", align: "center" },
+      { type: "text", text: "{employeeName}", size: "lg", color: "#FFFFFF", align: "center", margin: "sm" },
+    ],
+  },
+  body: {
+    type: "box",
+    layout: "vertical",
+    backgroundColor: "#FFFFFF",
+    spacing: "sm",
+    contents: [
+      {
+        type: "box",
+        layout: "horizontal",
+        spacing: "md",
+        contents: [
+          {
+            type: "box",
+            layout: "vertical",
+            width: "74px",
+            spacing: "sm",
+            contents: [
+              { type: "box", layout: "vertical", backgroundColor: "#32CBFF", cornerRadius: "16px", paddingAll: "8px", contents: [{ type: "text", text: "คงค้าง", size: "xs", color: "#FFFFFF", align: "center" }, { type: "text", text: "{outstandingShort}", weight: "bold", size: "md", color: "#FFFFFF", align: "center" }] },
+              { type: "box", layout: "vertical", backgroundColor: "#89A1EF", cornerRadius: "16px", paddingAll: "8px", contents: [{ type: "text", text: "สะสม", size: "xs", color: "#FFFFFF", align: "center" }, { type: "text", text: "{totalAdvanceShort}", weight: "bold", size: "sm", color: "#FFFFFF", align: "center" }] },
+              { type: "box", layout: "vertical", backgroundColor: "#EF9CDA", cornerRadius: "16px", paddingAll: "8px", contents: [{ type: "text", text: "ปิดแล้ว", size: "xs", color: "#FFFFFF", align: "center" }, { type: "text", text: "{closedAmountShort}", weight: "bold", size: "sm", color: "#FFFFFF", align: "center" }] },
+            ],
+          },
+          { type: "box", layout: "vertical", backgroundColor: "#FFFFFF", cornerRadius: "22px", height: "170px", flex: 1, contents: [{ type: "image", url: "{profileImageUrl}", size: "full", aspectMode: "cover", aspectRatio: "1:1" }] },
+        ],
+      },
+      { type: "separator", margin: "lg", color: "#E6D7F4" },
+      infoRow("โครงการ", "{projectName}", "#24324A"),
+      infoRow("ประเภท", "{category}", "#24324A"),
+      infoRow("วันที่ขอเบิก", "{date}", "#24324A"),
+      infoRow("กำหนดเคลียร์", "{neededDate}", "#24324A"),
+      { type: "separator", margin: "lg", color: "#E6D7F4" },
+      { type: "text", text: "เหตุผลการเบิก", weight: "bold", size: "sm", color: "#24324A" },
+      { type: "text", text: "{remark}", wrap: true, size: "sm", color: "#6B6F8B" },
+      { type: "box", layout: "vertical", backgroundColor: "#FFFFFF", cornerRadius: "18px", paddingAll: "xs", margin: "xs", spacing: "sm", contents: [{ type: "text", text: "{amount}", size: "xl", weight: "bold", color: "#000000", align: "center" }, { type: "text", text: "จำนวนเงินที่ขอเบิก", size: "xs", color: "#989898", align: "center", margin: "sm" }] },
+    ],
+  },
+  footer: {
+    type: "box",
+    layout: "horizontal",
+    spacing: "xs",
+    paddingAll: "none",
+    backgroundColor: "#FECEF1",
+    paddingBottom: "xl",
+    paddingStart: "xl",
+    paddingEnd: "xl",
+    contents: [
+      { type: "button", style: "primary", color: "#00A5E0", action: { type: "postback", label: "อนุมัติ", data: "action=approve&id={advId}" } },
+      { type: "button", style: "primary", color: "#EF9CDA", action: { type: "postback", label: "ไม่อนุมัติ", data: "action=reject&id={advId}" } },
+    ],
+  },
+  styles: { header: { backgroundColor: "#00A5E0" }, body: { backgroundColor: "#FECEF1" }, footer: { backgroundColor: "#FECEF1" } },
+});
+
+const rejectFlex = () => ({
+  type: "bubble",
+  size: "kilo",
+  header: { type: "box", layout: "vertical", backgroundColor: "#4C061D", paddingAll: "md", contents: [{ type: "text", text: "ไม่อนุมัติรายการ", weight: "bold", size: "lg", color: "#FFFFFF", align: "center" }] },
+  body: {
+    type: "box",
+    layout: "vertical",
+    spacing: "sm",
+    contents: [
+      infoRow("เลขที่", "{advId}"),
+      infoRow("ผู้ขอเบิก", "{employeeName}"),
+      { type: "separator", margin: "md" },
+      { type: "box", layout: "vertical", backgroundColor: "#E7CBCB", cornerRadius: "8px", paddingAll: "12px", margin: "md", contents: [{ type: "text", text: "เหตุผลที่ไม่อนุมัติ:", size: "xs", color: "#D84315", weight: "bold" }, { type: "text", text: "{rejectReason}", wrap: true, size: "xs", color: "#2E2E2E", margin: "sm" }] },
+    ],
+  },
+});
+
+const slipLiffFlex = () => ({
+  type: "bubble",
+  size: "kilo",
+  header: { type: "box", layout: "vertical", backgroundColor: "#00A5E0", paddingAll: "md", contents: [{ type: "text", text: "แนบสลิปโอนเงิน", weight: "bold", size: "lg", color: "#FFFFFF", align: "center" }] },
+  body: { type: "box", layout: "vertical", spacing: "sm", contents: [infoRow("เลขที่", "{advId}"), infoRow("ผู้ขอเบิก", "{employeeName}"), infoRow("ยอดโอน", "{amount}"), { type: "separator", margin: "md" }, { type: "text", text: "เปิดใน LINE เพื่อคัดลอกเลขบัญชีและแนบสลิปได้ทันที ข้อมูลจะบันทึกกลับเข้าระบบอัตโนมัติ", wrap: true, size: "xs", color: "#6B6F8B", margin: "md" }] },
+  footer: { type: "box", layout: "vertical", contents: [{ type: "button", style: "primary", color: "#00A5E0", action: { type: "uri", label: "เปิดหน้าแนบสลิปใน LINE", uri: "{liffSlipUrl}" } }] },
+});
+
+const reportFlex = (title: string, summaryVar: string) => ({
+  type: "bubble",
+  size: "kilo",
+  header: { type: "box", layout: "vertical", backgroundColor: "#24324A", paddingAll: "md", contents: [{ type: "text", text: title, weight: "bold", size: "lg", color: "#FFFFFF", align: "center" }] },
+  body: { type: "box", layout: "vertical", spacing: "sm", contents: [infoRow("ช่วงวันที่", "{dateRange}"), infoRow("คงค้าง", "{outstandingAmount}"), infoRow("รออนุมัติ", "{waitingApprovalCount} รายการ"), infoRow("รอเคลียร์", "{waitingClearanceCount} รายการ"), { type: "separator", margin: "md" }, { type: "text", text: summaryVar, wrap: true, size: "xs", color: "#2E2E2E", margin: "md" }] },
+});
+
+const buildSystemLineTriggers = (): LineMessageTrigger[] => [
+  { id: "onNewRequest", name: "ขออนุมัติรายการเบิกใหม่", isActive: true, type: "flex", altText: "มีรายการขออนุมัติใหม่ {advId}", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ADMIN], messageTemplate: stringifyFlex(approvalRequestFlex()) },
+  { id: "onManagerApproval", name: "อนุมัติแล้ว ส่งให้บัญชี/ผู้ขอเบิก", isActive: true, type: "flex", altText: "รายการ {advId} อนุมัติแล้ว", recipientMode: "accounting", recipientRoles: [UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("อนุมัติรายการแล้ว", "รายการ {advId} ได้รับอนุมัติแล้ว รอขั้นตอนบัญชีและโอนเงิน")) },
+  { id: "onReject", name: "ไม่อนุมัติรายการ", isActive: true, type: "flex", altText: "ไม่อนุมัติรายการ {advId}", recipientMode: "requester", messageTemplate: stringifyFlex(rejectFlex()) },
+  { id: "onTransferReady", name: "แจ้งแนบสลิปผ่าน LIFF", isActive: true, type: "flex", altText: "แนบสลิปโอนเงิน {advId}", recipientMode: "requester", messageTemplate: stringifyFlex(slipLiffFlex()) },
+  { id: "onClearanceSubmitted", name: "ส่งเอกสารเคลียร์ยอดแล้ว", isActive: true, type: "flex", altText: "ส่งเคลียร์ยอด {advId}", recipientMode: "accounting", recipientRoles: [UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("ส่งเคลียร์ยอดแล้ว", "รายการ {advId} ส่งเอกสารเคลียร์ยอดแล้ว ยอดส่งเคลียร์ {clearingAmount}")) },
+  { id: "onSettlement", name: "ปิดยอด Settlement", isActive: true, type: "flex", altText: "ปิดยอด {advId}", recipientMode: "requester", messageTemplate: stringifyFlex(reportFlex("ปิดยอดเรียบร้อย", "รายการ {advId} ปิดยอดแล้ว ผลต่างสุทธิ {settlementAmount}")) },
+  { id: "dailyReport", name: "รายงานประจำวัน", isActive: true, type: "flex", altText: "รายงานประจำวัน ClearAdvance", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("รายงานประจำวัน", "{dailySummary}")) },
+  { id: "weeklyReport", name: "รายงานประจำสัปดาห์", isActive: true, type: "flex", altText: "รายงานประจำสัปดาห์ ClearAdvance", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("รายงานประจำสัปดาห์", "{weeklySummary}")) },
+  { id: "outstandingReport", name: "รายการคงค้าง / Quick Reply", isActive: true, type: "flex", altText: "รายการคงค้าง ClearAdvance", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex({ contents: reportFlex("รายการคงค้าง", "{outstandingSummary}"), quickReply: { items: [{ type: "action", action: { type: "postback", label: "รายงานวันนี้", data: "report=daily" } }, { type: "action", action: { type: "postback", label: "รายงานสัปดาห์", data: "report=weekly" } }, { type: "action", action: { type: "postback", label: "คงค้าง", data: "report=outstanding" } }] } }) },
 ];
 
 type AdminSubTab =
@@ -295,7 +422,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   const [lineChannelAccessToken, setLineChannelAccessToken] = useState("");
   const [lineChannelSecret, setLineChannelSecret] = useState("");
   const [lineLiffId, setLineLiffId] = useState("");
-  const [lineTriggers, setLineTriggers] = useState<LineMessageTrigger[]>(DEFAULT_LINE_TRIGGERS);
+  const [lineTriggers, setLineTriggers] = useState<LineMessageTrigger[]>(buildSystemLineTriggers());
   const [previewTriggerId, setPreviewTriggerId] = useState<string>("onNewRequest");
   const [newLineTriggerName, setNewLineTriggerName] = useState("");
   const [newLineTriggerTemplate, setNewLineTriggerTemplate] = useState("");
@@ -1963,14 +2090,30 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   };
 
   const sampleLineVariables: Record<string, string> = {
-    advId: "ADV-2606-001",
+    advId: "ADV-2607-0018",
     employeeName: "สมชาย ใจดี",
-    amount: "5,000",
+    amount: "5,000 บาท",
     status: "รออนุมัติ",
     projectName: "Project Alpha",
     category: "ค่าเดินทาง",
-    remark: "ขอเบิกค่าใช้จ่ายหน้างาน",
+    remark: "ขอเบิกค่าใช้จ่ายหน้างานและค่าเดินทางไปพบลูกค้า",
     date: new Date().toLocaleDateString("th-TH"),
+    neededDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString("th-TH"),
+    rejectReason: "กรุณาแนบเอกสารใบเสนอราคา (Quotation) จากร้านค้าให้ครบถ้วนก่อนทำการเบิก",
+    liffSlipUrl: lineLiffId ? `https://liff.line.me/${lineLiffId}?adv_id=ADV-2607-0018` : "https://example.com/liff/upload-slip?adv_id=ADV-2607-0018",
+    profileImageUrl: "https://placehold.co/320x320/png?text=Profile",
+    outstandingShort: "12.5K",
+    totalAdvanceShort: "48K",
+    closedAmountShort: "35.5K",
+    clearingAmount: "4,800 บาท",
+    settlementAmount: "คืนบริษัท 200 บาท",
+    dateRange: new Date().toLocaleDateString("th-TH"),
+    outstandingAmount: "125,000 บาท",
+    waitingApprovalCount: "3",
+    waitingClearanceCount: "5",
+    dailySummary: "วันนี้มีรายการใหม่ 4 รายการ อนุมัติแล้ว 2 รายการ และยังรอเคลียร์ 5 รายการ",
+    weeklySummary: "สัปดาห์นี้มียอดเบิก 185,000 บาท ปิดยอดแล้ว 96,000 บาท",
+    outstandingSummary: "มีรายการคงค้าง 8 รายการ ยอดรวม 125,000 บาท ควรติดตาม 3 รายการที่เกินกำหนด",
   };
 
   const replaceLineVariables = (template: string) =>
@@ -1984,7 +2127,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   const parseFlexPreview = (template: string): { value: any | null; error: string | null } => {
     try {
       const parsed = JSON.parse(replaceLineVariables(template));
-      return { value: parsed.type === "flex" && parsed.contents ? parsed.contents : parsed, error: null };
+      return { value: parsed.type === "flex" && parsed.contents ? parsed.contents : parsed.contents || parsed, error: null };
     } catch (err: any) {
       return { value: null, error: err?.message || "JSON ไม่ถูกต้อง" };
     }
@@ -5212,13 +5355,27 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                 ตั้งค่าและเลือกว่าจะให้มีการแจ้งเตือนทาง LINE ในขั้นตอนใดบ้าง เช่น เมื่อมีการส่งขอเบิก เมื่อบัญชีอนุมัติ หรือเมื่อโอนเงินสำเร็จ
               </p>
             </div>
-            <button
-              onClick={handleSaveLineSettings}
-              disabled={saving}
-              className="px-5 py-2.5 bg-stone-950 hover:bg-stone-900 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 transition disabled:opacity-50"
-            >
-              <Check className="w-4 h-4" /> บันทึกการตั้งค่า LINE
-            </button>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!window.confirm("โหลดเทมเพลต LINE มาตรฐานใหม่? ข้อความที่แก้ไว้ในหน้านี้จะถูกแทนที่")) return;
+                  const defaults = buildSystemLineTriggers();
+                  setLineTriggers(defaults);
+                  setPreviewTriggerId(defaults[0]?.id || "");
+                }}
+                className="px-4 py-2.5 bg-white hover:bg-stone-50 text-stone-800 border border-stone-200 font-bold rounded-xl text-xs transition"
+              >
+                โหลดเทมเพลตมาตรฐาน
+              </button>
+              <button
+                onClick={handleSaveLineSettings}
+                disabled={saving}
+                className="px-5 py-2.5 bg-stone-950 hover:bg-stone-900 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 transition disabled:opacity-50"
+              >
+                <Check className="w-4 h-4" /> บันทึกการตั้งค่า LINE
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden shadow-xs p-6 space-y-6">
@@ -5330,6 +5487,60 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                                   FLEX
                                 </button>
                               </div>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-stone-500">Alt text</label>
+                                <input
+                                  type="text"
+                                  value={trigger.altText || ""}
+                                  placeholder="ข้อความสำรองที่ LINE แสดงในแชท"
+                                  onChange={(e) => {
+                                    const updated = [...lineTriggers];
+                                    updated[idx].altText = e.target.value;
+                                    setLineTriggers(updated);
+                                  }}
+                                  className="w-full text-xs bg-white border border-stone-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-stone-950"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-stone-500">ผู้รับข้อความ</label>
+                                <select
+                                  value={trigger.recipientMode || "target"}
+                                  onChange={(e) => {
+                                    const updated = [...lineTriggers];
+                                    updated[idx].recipientMode = e.target.value as LineMessageTrigger["recipientMode"];
+                                    setLineTriggers(updated);
+                                  }}
+                                  className="w-full text-xs bg-white border border-stone-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-stone-950"
+                                >
+                                  <option value="approvers">ผู้อนุมัติ / ตามบทบาท</option>
+                                  <option value="requester">ผู้ขอเบิก</option>
+                                  <option value="accounting">บัญชี</option>
+                                  <option value="target">พนักงานเป้าหมาย</option>
+                                  <option value="all">ทุกคนที่ผูก LINE</option>
+                                </select>
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {[UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN].map((role) => (
+                                <label key={role} className="inline-flex items-center gap-1 text-[10px] font-bold text-stone-600 bg-white border border-stone-200 rounded-lg px-2 py-1">
+                                  <input
+                                    type="checkbox"
+                                    checked={(trigger.recipientRoles || []).includes(role)}
+                                    onChange={(e) => {
+                                      const updated = [...lineTriggers];
+                                      const roles = new Set(updated[idx].recipientRoles || []);
+                                      if (e.target.checked) roles.add(role);
+                                      else roles.delete(role);
+                                      updated[idx].recipientRoles = Array.from(roles);
+                                      setLineTriggers(updated);
+                                    }}
+                                    className="w-3 h-3 rounded border-stone-300"
+                                  />
+                                  {role}
+                                </label>
+                              ))}
                             </div>
                             <textarea
                               value={trigger.messageTemplate}
