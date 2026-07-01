@@ -98,7 +98,7 @@ const copyToClipboard = async (text: string) => {
   document.body.appendChild(area);
   area.select();
   document.execCommand("copy");
-  document.body.removeChild(area);
+  area.remove();
 };
 
 export default function UploadSlipLiff() {

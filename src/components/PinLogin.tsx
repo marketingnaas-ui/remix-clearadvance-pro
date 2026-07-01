@@ -245,6 +245,18 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
   useEffect(() => {
     const initLiff = async () => {
       try {
+        const pathname = window.location.pathname;
+        const search = new URLSearchParams(window.location.search);
+        const isLineRuntime =
+          /Line/i.test(navigator.userAgent) ||
+          pathname.startsWith("/liff") ||
+          search.has("liff.state") ||
+          search.has("liff.referrer") ||
+          ["approve", "reject"].includes(search.get("action") || "") ||
+          search.has("adv_id");
+
+        if (!isLineRuntime) return;
+
         const settingsRef = doc(db, "settings", "global");
         const settingsSnap = await getDoc(settingsRef);
         if (settingsSnap.exists()) {

@@ -3,6 +3,28 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 
+// LINE WebView, browser translation, and some extensions can move text nodes while
+// React is committing updates. Guarding these DOM APIs prevents a non-critical
+// NotFoundError from taking down the whole app.
+const installDomMutationGuards = () => {
+  const originalRemoveChild = Node.prototype.removeChild;
+  const originalInsertBefore = Node.prototype.insertBefore;
+
+  Node.prototype.removeChild = function <T extends Node>(child: T): T {
+    if (child && child.parentNode !== this) return child;
+    return originalRemoveChild.call(this, child) as T;
+  };
+
+  Node.prototype.insertBefore = function <T extends Node>(newNode: T, referenceNode: Node | null): T {
+    if (referenceNode && referenceNode.parentNode !== this) {
+      return this.appendChild(newNode) as T;
+    }
+    return originalInsertBefore.call(this, newNode, referenceNode) as T;
+  };
+};
+
+installDomMutationGuards();
+
 // Professional Error Boundary for catching and displaying render/initialization errors
 interface Props {
   children: ReactNode;
@@ -116,4 +138,3 @@ createRoot(document.getElementById('root')!).render(
     </RootErrorBoundary>
   </StrictMode>,
 );
-
