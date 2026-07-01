@@ -22,6 +22,7 @@ import CloseAccount from "./components/CloseAccount";
 import AccountingReports from "./components/AccountingReports";
 import ProfileSettings from "./components/ProfileSettings";
 import UploadSlipLiff from "./components/UploadSlipLiff";
+import LiffAction from "./components/LiffAction";
 import { Employee, UserRole } from "./types";
 import { db } from "./lib/firebase";
 import { doc, onSnapshot } from "firebase/firestore";
@@ -114,7 +115,13 @@ export default function App() {
     setActiveTab("dashboard");
   };
 
-  const isUploadSlipRoute = window.location.pathname.includes("/liff/upload-slip") || window.location.search.includes("adv_id=");
+  const searchParams = new URLSearchParams(window.location.search);
+  const isLiffActionRoute = window.location.pathname.includes("/liff/action") || ["approve", "reject"].includes(searchParams.get("action") || "");
+  const isUploadSlipRoute = window.location.pathname.includes("/liff/upload-slip");
+
+  if (isLiffActionRoute) {
+    return <LiffAction />;
+  }
 
   if (isUploadSlipRoute) {
     return <UploadSlipLiff />;

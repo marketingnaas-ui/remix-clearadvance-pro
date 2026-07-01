@@ -164,6 +164,25 @@ const replaceVariablesInObject = (obj: any, vars: Record<string, any>): any => {
   return obj;
 };
 
+const normalizeLineLiffActions = (obj: any, vars: Record<string, any>): any => {
+  if (Array.isArray(obj)) return obj.map((item) => normalizeLineLiffActions(item, vars));
+  if (obj !== null && typeof obj === "object") {
+    const action = obj.action;
+    if (action?.type === "postback" && typeof action.data === "string") {
+      const data = new URLSearchParams(action.data);
+      const actionName = data.get("action");
+      if (actionName === "approve" && vars.liffActionApproveUrl) {
+        return { ...obj, action: { type: "uri", label: action.label || "อนุมัติ", uri: vars.liffActionApproveUrl } };
+      }
+      if (actionName === "reject" && vars.liffActionRejectUrl) {
+        return { ...obj, action: { type: "uri", label: action.label || "ไม่อนุมัติ", uri: vars.liffActionRejectUrl } };
+      }
+    }
+    return Object.fromEntries(Object.entries(obj).map(([key, value]) => [key, normalizeLineLiffActions(value, vars)]));
+  }
+  return obj;
+};
+
 const parseLineTemplate = (template: any) => {
   if (typeof template !== "string") return template;
   return JSON.parse(template);
@@ -172,7 +191,7 @@ const parseLineTemplate = (template: any) => {
 const createLineMessagePayload = (trigger: any, variables: Record<string, any>) => {
   if (trigger.type === "flex") {
     const templateJson = parseLineTemplate(trigger.messageTemplate);
-    const resolvedJson = replaceVariablesInObject(templateJson, variables);
+    const resolvedJson = normalizeLineLiffActions(replaceVariablesInObject(templateJson, variables), variables);
     const contents = resolvedJson?.type === "flex" && resolvedJson.contents
       ? resolvedJson.contents
       : resolvedJson?.contents || resolvedJson;
@@ -203,6 +222,48 @@ const buildLiffUrl = (lineConfig: any, advId?: string) => {
   if (lineConfig?.liffId) return `https://liff.line.me/${lineConfig.liffId}${suffix}`;
   const baseUrl = process.env.APP_URL || process.env.PUBLIC_APP_URL || process.env.VITE_APP_URL || "http://localhost:3002";
   return `${baseUrl.replace(/\/$/, "")}/liff/upload-slip${suffix}`;
+};
+
+const buildLiffActionUrl = (lineConfig: any, advId?: string, action?: string) => {
+  const params = new URLSearchParams();
+  if (action) params.set("action", action);
+  if (advId) params.set("adv_id", advId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  if (lineConfig?.liffId) return `https://liff.line.me/${lineConfig.liffId}${suffix}`;
+  return `${getPublicBaseUrl()}/liff/action${suffix}`;
+};
+
+const getEmployeeBankInfo = (advance: any, employee: any) => {
+  const custom = advance?.customTransferAccount || {};
+  return {
+    bankName: custom.bankName || advance?.bankName || employee?.bankName || "",
+    accountName: custom.accountName || advance?.bankAccountName || employee?.bankAccountName || employee?.name || advance?.employeeName || "",
+    accountNumber: custom.accountNo || custom.accountNumber || advance?.bankNo || employee?.bankNo || employee?.bankAccountNo || employee?.bankAccountNumber || "",
+  };
+};
+
+const getAdvanceForLine = async (advId: string) => {
+  const advance: any = await getDocByIdOrField("advances", advId, "advId");
+  if (!advance) return null;
+  const employeeId = advance.employeeId || advance.requesterId || advance.userId;
+  const employee: any = await getDocByIdOrField("employees", employeeId, "employeeId");
+  const bankInfo = getEmployeeBankInfo(advance, employee);
+  return {
+    id: advance.id,
+    advId: advance.advId || advance.advanceNo || advance.id,
+    employeeId,
+    employeeName: advance.employeeName || advance.requesterName || employee?.name || employee?.fullName || "-",
+    projectId: advance.projectId || "",
+    projectName: advance.projectName || advance.project || "",
+    category: advance.category || advance.expenseCategory || advance.expenseType || "",
+    details: advance.details || advance.remark || advance.reason || advance.description || "",
+    requestAmount: Number(advance.requestAmount || advance.amount || advance.totalAmount || advance.advanceAmount || 0),
+    status: advance.status || "",
+    bankName: bankInfo.bankName,
+    bankAccountName: bankInfo.accountName,
+    bankAccountNumber: bankInfo.accountNumber,
+    transferSlipUrl: advance.transferSlipUrl || advance.slipUrl || "",
+  };
 };
 
 const enrichLineVariables = async (inputVariables: Record<string, any>, lineConfig: any) => {
@@ -259,6 +320,8 @@ const enrichLineVariables = async (inputVariables: Record<string, any>, lineConf
   variables.settlementAmount = variables.settlementAmount || variables.settlementResult || formatMoney(0);
   variables.rejectReason = variables.rejectReason || variables.reason || variables.remark || "กรุณาตรวจสอบและแก้ไขข้อมูลก่อนส่งอนุมัติอีกครั้ง";
   variables.liffSlipUrl = variables.liffSlipUrl || buildLiffUrl(lineConfig, variables.advId);
+  variables.liffActionApproveUrl = variables.liffActionApproveUrl || buildLiffActionUrl(lineConfig, variables.advId, "approve");
+  variables.liffActionRejectUrl = variables.liffActionRejectUrl || buildLiffActionUrl(lineConfig, variables.advId, "reject");
   variables.profileImageUrl = resolveProfileImageUrl(null, variables.profileImageUrl) || "https://placehold.co/320x320/png?text=Profile";
   variables.outstandingShort = variables.outstandingShort || shortMoney(outstandingTotal);
   variables.totalAdvanceShort = variables.totalAdvanceShort || shortMoney(totalAdvance);
@@ -585,6 +648,135 @@ async function startServer() {
     } catch (err: any) {
       console.error("Send LINE Notification error:", err);
       return res.status(500).json({ error: err.message || "Internal server error during notification dispatch." });
+    }
+  });
+
+  app.get("/api/line/liff-advance/:advId", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const advId = req.params.advId;
+      const advance = await getAdvanceForLine(advId);
+      if (!advance) return res.status(404).json({ error: "ไม่พบข้อมูลใบเบิกนี้" });
+      return res.json({ status: "success", advance });
+    } catch (err: any) {
+      console.error("LINE LIFF advance fetch error:", err);
+      return res.status(500).json({ error: err.message || "Cannot load advance for LIFF." });
+    }
+  });
+
+  app.post("/api/line/liff-action", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const { advId, action, userId, displayName } = req.body || {};
+      if (!advId || !["approve", "reject"].includes(action)) {
+        return res.status(400).json({ error: "Missing advId or invalid action." });
+      }
+
+      const advance: any = await getDocByIdOrField("advances", advId, "advId");
+      if (!advance?.id) return res.status(404).json({ error: "ไม่พบข้อมูลใบเบิกนี้" });
+
+      let approverName = displayName || "LINE LIFF";
+      if (userId) {
+        const approverSnap = await firestoreDb.collection("employees").where("lineUserId", "==", userId).limit(1).get();
+        if (!approverSnap.empty) {
+          const approver = approverSnap.docs[0].data();
+          approverName = approver.name || approver.fullName || approver.lineDisplayName || approverName;
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      const updatePayload = action === "approve"
+        ? {
+            status: "WAITING_TRANSFER",
+            approvedAt: nowIso,
+            approvedBy: approverName,
+            lineActionAt: FieldValue.serverTimestamp(),
+            lineActionBy: userId || approverName,
+            lineActionSource: "liff",
+          }
+        : {
+            status: "REJECTED",
+            rejectedAt: nowIso,
+            rejectedBy: approverName,
+            lineActionAt: FieldValue.serverTimestamp(),
+            lineActionBy: userId || approverName,
+            lineActionSource: "liff",
+          };
+
+      await firestoreDb.collection("advances").doc(advance.id).set(updatePayload, { merge: true });
+
+      const auditId = `audit-line-${Date.now()}-${advance.id}`;
+      await firestoreDb.collection("auditLogs").doc(auditId).set({
+        id: auditId,
+        advId: advance.advId || advId,
+        actionType: action === "approve" ? "APPROVE_ADVANCE" : "REJECT_ADVANCE",
+        actionBy: approverName,
+        role: "LINE",
+        timestamp: nowIso,
+        beforeStatus: advance.status || "",
+        afterStatus: updatePayload.status,
+        note: action === "approve" ? "อนุมัติผ่าน LINE LIFF" : "ไม่อนุมัติผ่าน LINE LIFF",
+      }, { merge: true });
+
+      const updatedAdvance = await getAdvanceForLine(advId);
+      return res.json({ status: "success", action, advance: updatedAdvance });
+    } catch (err: any) {
+      console.error("LINE LIFF action error:", err);
+      return res.status(500).json({ error: err.message || "Cannot update advance from LIFF." });
+    }
+  });
+
+  app.post("/api/line/upload-slip", upload.single("slip"), async (req, res) => {
+    try {
+      if (!firestoreDb || !bucket) return res.status(500).json({ error: "Firebase Admin storage is not initialized on the server." });
+      const advId = req.body?.advId;
+      if (!advId || !req.file) return res.status(400).json({ error: "Missing advId or slip file." });
+
+      const advance: any = await getDocByIdOrField("advances", advId, "advId");
+      if (!advance?.id) return res.status(404).json({ error: "ไม่พบข้อมูลใบเบิกนี้" });
+
+      const extension = path.extname(req.file.originalname || "") || ".jpg";
+      const safeAdvId = String(advId).replace(/[^a-zA-Z0-9_-]/g, "_");
+      const filePath = `slips/${safeAdvId}/slip_${Date.now()}${extension}`;
+      const remoteFile = bucket.file(filePath);
+      await remoteFile.save(req.file.buffer, {
+        contentType: req.file.mimetype || "image/jpeg",
+        metadata: { cacheControl: "public, max-age=31536000" },
+      });
+
+      let downloadUrl = "";
+      try {
+        const [signedUrl] = await remoteFile.getSignedUrl({ action: "read", expires: "2500-01-01" });
+        downloadUrl = signedUrl;
+      } catch {
+        downloadUrl = `https://storage.googleapis.com/${bucket.name}/${encodeURIComponent(filePath)}`;
+      }
+
+      await firestoreDb.collection("advances").doc(advance.id).set({
+        status: "WAITING_CLEARANCE",
+        slipUrl: downloadUrl,
+        transferSlipUrl: downloadUrl,
+        transferCompletedAt: FieldValue.serverTimestamp(),
+        transferUpdatedFrom: "line_liff",
+      }, { merge: true });
+
+      const auditId = `audit-slip-${Date.now()}-${advance.id}`;
+      await firestoreDb.collection("auditLogs").doc(auditId).set({
+        id: auditId,
+        advId: advance.advId || advId,
+        actionType: "UPLOAD_TRANSFER_SLIP",
+        actionBy: "LINE LIFF",
+        role: "LINE",
+        timestamp: new Date().toISOString(),
+        beforeStatus: advance.status || "",
+        afterStatus: "WAITING_CLEARANCE",
+        note: "แนบสลิปผ่าน LINE LIFF",
+      }, { merge: true });
+
+      return res.json({ status: "success", url: downloadUrl });
+    } catch (err: any) {
+      console.error("LINE LIFF slip upload error:", err);
+      return res.status(500).json({ error: err.message || "Cannot upload slip from LIFF." });
     }
   });
 

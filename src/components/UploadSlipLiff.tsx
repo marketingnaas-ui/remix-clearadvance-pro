@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { motion } from "motion/react";
 import liff from "@line/liff";
 import { collection, doc, getDoc, getDocs, limit, query, serverTimestamp, updateDoc, where } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
@@ -17,7 +16,7 @@ interface AdvanceInfo {
   amount: number;
   status: string;
   requesterName: string;
-  employeeId?: string;
+  bankInfo: BankInfo;
 }
 
 const emptyBankInfo: BankInfo = {
@@ -25,6 +24,12 @@ const emptyBankInfo: BankInfo = {
   accountName: "ยังไม่ได้ตั้งค่าชื่อบัญชี",
   accountNumber: "-",
 };
+
+const money = (value: number) =>
+  `฿${Number(value || 0).toLocaleString("th-TH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 
 const getAdvanceByCode = async (advCode: string) => {
   const byId = await getDoc(doc(db, "advances", advCode));
@@ -54,19 +59,51 @@ const getEmployeeById = async (employeeId?: string) => {
   return byEmployeeId.empty ? null : byEmployeeId.docs[0].data();
 };
 
-const getConfiguredBank = (settings: any): BankInfo => {
+const getBankInfo = (advance: any, employee: any, settings: any): BankInfo => {
+  const custom = advance?.customTransferAccount || {};
   const bank = settings?.bankInfo || settings?.companyBankInfo || settings?.transferBankInfo || {};
   return {
-    bankName: bank.bankName || bank.name || emptyBankInfo.bankName,
-    accountName: bank.accountName || bank.bankAccountName || emptyBankInfo.accountName,
-    accountNumber: bank.accountNumber || bank.bankNo || bank.bankAccountNo || emptyBankInfo.accountNumber,
+    bankName: custom.bankName || advance?.bankName || employee?.bankName || bank.bankName || bank.name || emptyBankInfo.bankName,
+    accountName:
+      custom.accountName ||
+      advance?.bankAccountName ||
+      employee?.bankAccountName ||
+      employee?.name ||
+      bank.accountName ||
+      bank.bankAccountName ||
+      emptyBankInfo.accountName,
+    accountNumber:
+      custom.accountNo ||
+      custom.accountNumber ||
+      advance?.bankNo ||
+      employee?.bankNo ||
+      employee?.bankAccountNo ||
+      employee?.bankAccountNumber ||
+      bank.accountNumber ||
+      bank.bankNo ||
+      bank.bankAccountNo ||
+      emptyBankInfo.accountNumber,
   };
+};
+
+const copyToClipboard = async (text: string) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand("copy");
+  document.body.removeChild(area);
 };
 
 export default function UploadSlipLiff() {
   const [advId, setAdvId] = useState<string | null>(null);
   const [advanceInfo, setAdvanceInfo] = useState<AdvanceInfo | null>(null);
-  const [bankInfo, setBankInfo] = useState<BankInfo | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [isCopied, setIsCopied] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -84,7 +121,10 @@ export default function UploadSlipLiff() {
         setAdvId(currentAdvId);
         const settingsSnapshot = await getDoc(doc(db, "settings", "global"));
         const settings = settingsSnapshot.exists() ? settingsSnapshot.data() : {};
-        const configuredLiffId = settings?.lineMessagingConfig?.liffId || settings?.lineConfig?.liffId || import.meta.env.VITE_LIFF_UPLOAD_SLIP_ID;
+        const configuredLiffId =
+          settings?.lineMessagingConfig?.liffId ||
+          settings?.lineConfig?.liffId ||
+          import.meta.env.VITE_LIFF_UPLOAD_SLIP_ID;
         if (configuredLiffId) await liff.init({ liffId: configuredLiffId });
 
         const advanceRecord = await getAdvanceByCode(currentAdvId);
@@ -100,16 +140,8 @@ export default function UploadSlipLiff() {
           amount: Number(adv.requestAmount || adv.amount || adv.totalAmount || adv.advanceAmount || 0),
           status: String(adv.status || ""),
           requesterName: String(requesterName),
-          employeeId,
+          bankInfo: getBankInfo(adv, employee, settings),
         });
-
-        const employeeBank: BankInfo = {
-          bankName: employee?.bankName || "",
-          accountName: employee?.bankAccountName || employee?.name || "",
-          accountNumber: employee?.bankNo || employee?.bankAccountNo || employee?.bankAccountNumber || "",
-        };
-        const configuredBank = getConfiguredBank(settings);
-        setBankInfo(employeeBank.accountNumber ? employeeBank : configuredBank);
       } catch (err: any) {
         console.error("LIFF slip upload initialization failed:", err);
         setError(err?.message || "ไม่สามารถเปิดหน้าแนบสลิปได้");
@@ -122,16 +154,14 @@ export default function UploadSlipLiff() {
   }, []);
 
   const closePage = () => {
-    if (liff.isInClient()) {
-      liff.closeWindow();
-    } else {
-      window.history.back();
-    }
+    if (liff.isInClient()) liff.closeWindow();
+    else window.history.back();
   };
 
   const handleCopyAccount = async () => {
-    if (!bankInfo?.accountNumber || bankInfo.accountNumber === "-") return;
-    await navigator.clipboard.writeText(bankInfo.accountNumber);
+    const account = advanceInfo?.bankInfo.accountNumber || "";
+    if (!account || account === "-") return;
+    await copyToClipboard(account);
     setIsCopied(true);
     window.setTimeout(() => setIsCopied(false), 2000);
   };
@@ -139,12 +169,10 @@ export default function UploadSlipLiff() {
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = event.target.files?.[0];
     if (!selectedFile) return;
-
-    if (selectedFile.size > 5 * 1024 * 1024) {
-      alert("ขนาดไฟล์ต้องไม่เกิน 5MB");
+    if (selectedFile.size > 8 * 1024 * 1024) {
+      alert("ขนาดไฟล์ต้องไม่เกิน 8MB");
       return;
     }
-
     setFile(selectedFile);
     setPreviewUrl(URL.createObjectURL(selectedFile));
   };
@@ -155,25 +183,45 @@ export default function UploadSlipLiff() {
     setPreviewUrl(null);
   };
 
+  const uploadViaServer = async (selectedFile: File) => {
+    const form = new FormData();
+    form.append("advId", advId || "");
+    form.append("slip", selectedFile);
+    const response = await fetch("/api/line/upload-slip", { method: "POST", body: form });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload?.error || "อัปโหลดผ่าน server ไม่สำเร็จ");
+    return payload.url as string;
+  };
+
+  const uploadViaClientFallback = async (selectedFile: File) => {
+    if (!advId || !advanceInfo) throw new Error("ข้อมูลใบเบิกไม่ครบถ้วน");
+    const fileExtension = selectedFile.name.split(".").pop() || "jpg";
+    const fileName = `slip_${advId}_${Date.now()}.${fileExtension}`;
+    const storageRef = ref(storage, `slips/${advId}/${fileName}`);
+    const uploadResult = await uploadBytes(storageRef, selectedFile);
+    const downloadUrl = await getDownloadURL(uploadResult.ref);
+    await updateDoc(doc(db, "advances", advanceInfo.docId), {
+      status: "WAITING_CLEARANCE",
+      slipUrl: downloadUrl,
+      transferSlipUrl: downloadUrl,
+      transferCompletedAt: serverTimestamp(),
+      transferUpdatedFrom: "line_liff",
+    });
+    return downloadUrl;
+  };
+
   const handleSubmit = async () => {
     if (!file || !advId || !advanceInfo) return;
     setIsUploading(true);
     setError(null);
 
     try {
-      const fileExtension = file.name.split(".").pop() || "jpg";
-      const fileName = `slip_${advId}_${Date.now()}.${fileExtension}`;
-      const storageRef = ref(storage, `slips/${advId}/${fileName}`);
-      const uploadResult = await uploadBytes(storageRef, file);
-      const downloadUrl = await getDownloadURL(uploadResult.ref);
-
-      await updateDoc(doc(db, "advances", advanceInfo.docId), {
-        status: "WAITING_CLEARANCE",
-        slipUrl: downloadUrl,
-        transferSlipUrl: downloadUrl,
-        transferCompletedAt: serverTimestamp(),
-        transferUpdatedFrom: "line_liff",
-      });
+      try {
+        await uploadViaServer(file);
+      } catch (serverError) {
+        console.warn("Server slip upload failed, using client fallback:", serverError);
+        await uploadViaClientFallback(file);
+      }
 
       if (liff.isInClient()) {
         liff.closeWindow();
@@ -210,66 +258,60 @@ export default function UploadSlipLiff() {
     );
   }
 
+  const bankInfo = advanceInfo.bankInfo;
+
   return (
     <div className="min-h-screen bg-stone-50 text-stone-950 font-sans pb-10">
-      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-stone-200 px-4 py-4 flex items-center justify-between shadow-sm">
-        <h1 className="text-lg font-semibold">แนบหลักฐานการโอนเงิน</h1>
+      <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-stone-200 px-4 py-4 flex items-center justify-between shadow-sm">
+        <h1 className="text-lg font-semibold">แนบสลิปโอนเงิน</h1>
         <button onClick={closePage} className="text-stone-500 hover:bg-stone-100 p-1 rounded-full transition">
           <X size={24} />
         </button>
       </header>
 
-      <main className="p-4 space-y-6">
+      <main className="p-4 space-y-6 max-w-md mx-auto">
         <div className="text-center space-y-1">
           <p className="text-sm text-stone-500">ยอดเงินที่ต้องโอน ({advId})</p>
-          <h2 className="text-3xl font-bold text-stone-900">
-            ฿{advanceInfo.amount.toLocaleString("th-TH", { minimumFractionDigits: 2 })}
-          </h2>
+          <h2 className="text-3xl font-bold text-stone-900">{money(advanceInfo.amount)}</h2>
           <p className="text-xs text-stone-400">ผู้ขอเบิก: {advanceInfo.requesterName}</p>
           {advanceInfo.status && <p className="text-[11px] text-stone-400">สถานะปัจจุบัน: {advanceInfo.status}</p>}
         </div>
 
-        {bankInfo && (
-          <motion.section
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-white p-5 rounded-2xl shadow-sm border border-stone-100 space-y-3"
-          >
-            <div className="flex justify-between items-center border-b border-stone-100 pb-3 gap-4">
-              <span className="text-sm text-stone-500">ธนาคาร</span>
-              <span className="font-medium text-sm text-right">{bankInfo.bankName}</span>
+        <section className="bg-white p-5 rounded-2xl shadow-sm border border-stone-100 space-y-3">
+          <div className="flex justify-between items-center border-b border-stone-100 pb-3 gap-4">
+            <span className="text-sm text-stone-500">ธนาคาร</span>
+            <span className="font-medium text-sm text-right">{bankInfo.bankName}</span>
+          </div>
+          <div className="flex justify-between items-center border-b border-stone-100 pb-3 gap-4">
+            <span className="text-sm text-stone-500">ชื่อบัญชี</span>
+            <span className="font-medium text-sm text-right">{bankInfo.accountName}</span>
+          </div>
+          <div className="flex justify-between items-center pt-1 gap-4">
+            <div className="min-w-0">
+              <p className="text-sm text-stone-500">เลขที่บัญชี</p>
+              <p className="text-lg font-bold text-stone-900 mt-1 break-all">{bankInfo.accountNumber}</p>
             </div>
-            <div className="flex justify-between items-center border-b border-stone-100 pb-3 gap-4">
-              <span className="text-sm text-stone-500">ชื่อบัญชี</span>
-              <span className="font-medium text-sm text-right">{bankInfo.accountName}</span>
-            </div>
-            <div className="flex justify-between items-center pt-1 gap-4">
-              <div>
-                <p className="text-sm text-stone-500">เลขที่บัญชี</p>
-                <p className="text-lg font-bold text-stone-900 mt-1">{bankInfo.accountNumber}</p>
-              </div>
-              <button
-                onClick={handleCopyAccount}
-                disabled={!bankInfo.accountNumber || bankInfo.accountNumber === "-"}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-                  isCopied ? "bg-emerald-100 text-emerald-700" : "bg-blue-50 text-blue-600 active:scale-95"
-                }`}
-              >
-                {isCopied ? <CheckCircle2 size={18} /> : <Copy size={18} />}
-                {isCopied ? "คัดลอกแล้ว" : "คัดลอก"}
-              </button>
-            </div>
-          </motion.section>
-        )}
+            <button
+              onClick={handleCopyAccount}
+              disabled={!bankInfo.accountNumber || bankInfo.accountNumber === "-"}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                isCopied ? "bg-emerald-100 text-emerald-700" : "bg-blue-50 text-blue-600 active:scale-95"
+              }`}
+            >
+              {isCopied ? <CheckCircle2 size={18} /> : <Copy size={18} />}
+              {isCopied ? "คัดลอกแล้ว" : "คัดลอก"}
+            </button>
+          </div>
+        </section>
 
-        <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="space-y-3">
+        <section className="space-y-3">
           <p className="text-sm font-medium text-stone-700 px-1">รูปภาพสลิปโอนเงิน</p>
 
           {!previewUrl ? (
             <label className="flex flex-col items-center justify-center w-full h-48 bg-white border-2 border-dashed border-stone-200 rounded-2xl cursor-pointer hover:bg-stone-50 transition active:scale-[0.98]">
               <UploadCloud className="w-10 h-10 text-stone-400 mb-3" />
               <p className="text-sm text-stone-500 font-medium">กดเพื่อเลือกรูปภาพ</p>
-              <p className="text-xs text-stone-400 mt-1">รองรับ JPG, PNG ขนาดไม่เกิน 5MB</p>
+              <p className="text-xs text-stone-400 mt-1">รองรับ JPG, PNG ขนาดไม่เกิน 8MB</p>
               <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
             </label>
           ) : (
@@ -280,7 +322,7 @@ export default function UploadSlipLiff() {
               </button>
             </div>
           )}
-        </motion.section>
+        </section>
 
         {error && <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl p-3">{error}</p>}
 
