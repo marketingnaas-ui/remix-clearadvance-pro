@@ -92,7 +92,8 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
     }
   }, [preparedBills]);
 
-  const activeBill = preparedBills[activeBillIndex] || {
+  const activeBill = {
+    ...(preparedBills[activeBillIndex] || {
     id: "",
     vendorName: "",
     vendorTaxId: "",
@@ -109,7 +110,12 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
     ocrConfidence: 0,
     projectMode: "SINGLE",
     singleProjectId: "",
+    }),
+    lineItems: Array.isArray(preparedBills[activeBillIndex]?.lineItems) && preparedBills[activeBillIndex]?.lineItems.length
+      ? preparedBills[activeBillIndex].lineItems
+      : [{ itemName: "", qty: 1, unitPrice: 0, amount: 0 }],
   };
+  const projectOptions = Array.isArray(settings?.projects) ? settings.projects : [];
 
   // Helper to update the active bill state
   const updateActiveBill = (fields: Partial<PreparedBill>) => {
@@ -122,8 +128,14 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
     });
   };
 
+  const getBillLineItems = (bill: Partial<PreparedBill> | null | undefined) =>
+    Array.isArray(bill?.lineItems) && bill.lineItems.length
+      ? bill.lineItems
+      : [{ itemName: "", qty: 1, unitPrice: 0, amount: 0 }];
+
   const calculateBillTotals = (bill: PreparedBill) => {
-    const baseItemPrice = bill.lineItems.reduce((sum, item) => sum + item.amount, 0);
+    const lineItems = getBillLineItems(bill);
+    const baseItemPrice = lineItems.reduce((sum, item) => sum + (item.amount || 0), 0);
     const taxableBase = baseItemPrice - bill.discount + bill.otherExpenseAmount;
 
     let calculatedPreVat = taxableBase;
@@ -476,7 +488,8 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
           };
 
           // If first item is empty placeholder, replace it
-          if (newlyPreparedBills.length === 1 && !newlyPreparedBills[0].vendorName && newlyPreparedBills[0].lineItems.length === 1 && !newlyPreparedBills[0].lineItems[0].itemName) {
+          const firstBillLineItems = getBillLineItems(newlyPreparedBills[0]);
+          if (newlyPreparedBills.length === 1 && !newlyPreparedBills[0].vendorName && firstBillLineItems.length === 1 && !firstBillLineItems[0].itemName) {
             newlyPreparedBills[0] = newBill;
           } else {
             newlyPreparedBills.push(newBill);
@@ -559,8 +572,9 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
         return;
       }
 
-      for (let i = 0; i < bill.lineItems.length; i++) {
-        const item = bill.lineItems[i];
+      const billLineItems = getBillLineItems(bill);
+      for (let i = 0; i < billLineItems.length; i++) {
+        const item = billLineItems[i];
         if (!item.itemName.trim()) {
           setError(`กรุณากรอกรายละเอียดรายการสินค้า/บริการ ลำดับที่ ${i + 1} สำหรับใบเสร็จ${billNum}`);
           return;
@@ -643,12 +657,13 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
       // 2. Save each prepared bill as separate clearingItems
       for (let b = 0; b < preparedBills.length; b++) {
         const bill = preparedBills[b];
+        const billLineItems = getBillLineItems(bill);
         const totals = calculateBillTotals(bill);
         const itemId = bill.id.startsWith("bill-") ? `item-${Date.now()}-${b}` : bill.id;
 
         const primaryProjectId = (bill.projectMode === "SINGLE"
           ? bill.singleProjectId
-          : (bill.lineItems[0]?.projectId || selectedAdv.projectId)) || selectedAdv.projectId || "";
+          : (billLineItems[0]?.projectId || selectedAdv.projectId)) || selectedAdv.projectId || "";
 
         const newItem: ClearingItem = {
           id: itemId,
@@ -661,10 +676,10 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
           invoiceNo: bill.invoiceNo || "",
           documentDate: bill.documentDate || "",
           // Backward-compatible properties
-          itemName: bill.lineItems[0]?.itemName || "",
-          qty: bill.lineItems[0]?.qty || 1,
-          unitPrice: bill.lineItems[0]?.unitPrice || 0,
-          lineItems: bill.lineItems.map((item) => ({
+          itemName: billLineItems[0]?.itemName || "",
+          qty: billLineItems[0]?.qty || 1,
+          unitPrice: billLineItems[0]?.unitPrice || 0,
+          lineItems: billLineItems.map((item) => ({
             itemName: item.itemName || "",
             qty: item.qty || 1,
             unitPrice: item.unitPrice || 0,
@@ -683,7 +698,7 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
           isDuplicate: false,
           accountantApproved: false,
           rawOcrJson: bill.rawOcrJson || "",
-          projectSplits: bill.lineItems.map((item) => ({
+          projectSplits: billLineItems.map((item) => ({
             projectId: item.projectId || primaryProjectId,
             amount: item.amount || 0,
           })),
@@ -746,6 +761,7 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
 
       for (let b = 0; b < preparedBills.length; b++) {
         const bill = preparedBills[b];
+        const billLineItems = getBillLineItems(bill);
         const totals = calculateBillTotals(bill);
         const currentLogId = preparedBills.length > 1 ? `${logIdPrefix}-${b}` : logIdPrefix;
         
@@ -770,7 +786,7 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
         const itemId = bill.id.startsWith("bill-") ? `item-${Date.now()}-${b}` : bill.id;
         const primaryProjectId = (bill.projectMode === "SINGLE"
           ? bill.singleProjectId
-          : (bill.lineItems[0]?.projectId || selectedAdv.projectId)) || selectedAdv.projectId || "";
+          : (billLineItems[0]?.projectId || selectedAdv.projectId)) || selectedAdv.projectId || "";
 
         const newItem: ClearingItem = {
           id: itemId,
@@ -782,10 +798,10 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
           documentType: bill.documentType,
           invoiceNo: bill.invoiceNo || "",
           documentDate: bill.documentDate || "",
-          itemName: bill.lineItems[0]?.itemName || "",
-          qty: bill.lineItems[0]?.qty || 1,
-          unitPrice: bill.lineItems[0]?.unitPrice || 0,
-          lineItems: bill.lineItems.map((item) => ({
+          itemName: billLineItems[0]?.itemName || "",
+          qty: billLineItems[0]?.qty || 1,
+          unitPrice: billLineItems[0]?.unitPrice || 0,
+          lineItems: billLineItems.map((item) => ({
             itemName: item.itemName || "",
             qty: item.qty || 1,
             unitPrice: item.unitPrice || 0,
@@ -804,7 +820,7 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
           isDuplicate: false,
           accountantApproved: false,
           rawOcrJson: bill.rawOcrJson || "",
-          projectSplits: bill.lineItems.map((item) => ({
+          projectSplits: billLineItems.map((item) => ({
             projectId: item.projectId || primaryProjectId,
             amount: item.amount || 0,
           })),
@@ -1278,7 +1294,7 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
                         className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs focus:outline-none"
                       >
                         <option value="">-- เลือกโครงการ --</option>
-                        {settings?.projects.map((proj) => {
+                        {projectOptions.map((proj) => {
                           const isTarget = proj === advances.find(a => a.id === selectedAdvId)?.projectId;
                           return (
                             <option key={proj} value={proj} className={isTarget ? "bg-stone-200 font-bold" : ""}>
@@ -1377,7 +1393,7 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
                                   className="w-full px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-lg text-xs"
                                 >
                                   <option value="">-- เลือกโครงการ --</option>
-                                  {settings?.projects.map((proj) => (
+                                  {projectOptions.map((proj) => (
                                     <option key={proj} value={proj}>{proj}</option>
                                   ))}
                                 </select>
@@ -1586,9 +1602,10 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
             <div className="space-y-4 max-h-[400px] overflow-y-auto">
               {preparedBills.map((bill, index) => {
                 const totals = calculateBillTotals(bill);
+                const billLineItems = getBillLineItems(bill);
                 const primaryProj = (bill.projectMode === "SINGLE"
                   ? bill.singleProjectId
-                  : (bill.lineItems[0]?.projectId || advances.find(a => a.id === selectedAdvId)?.projectId)) || "";
+                  : (billLineItems[0]?.projectId || advances.find(a => a.id === selectedAdvId)?.projectId)) || "";
 
                 return (
                   <div key={bill.id} className="p-4 bg-stone-50 rounded-2xl border border-stone-200/70 space-y-3">
@@ -1608,7 +1625,7 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
                     </div>
 
                     <div className="text-xs space-y-1.5">
-                      {bill.lineItems.map((item, itemIdx) => (
+                      {billLineItems.map((item, itemIdx) => (
                         <div key={itemIdx} className="flex justify-between text-stone-600 gap-4">
                           <span>
                             - {item.itemName || "รายการเปล่า"} (x{item.qty})
