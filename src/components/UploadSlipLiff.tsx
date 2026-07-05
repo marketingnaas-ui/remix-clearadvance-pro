@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import liff from "@line/liff";
-import { collection, doc, getDoc, getDocs, limit, query, serverTimestamp, updateDoc, where } from "firebase/firestore";
-import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
+import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/firestore";
 import { CheckCircle2, Copy, Loader2, UploadCloud, X } from "lucide-react";
-import { db, storage } from "../lib/firebase";
+import { db } from "../lib/firebase";
 
 interface BankInfo {
   bankName: string;
@@ -223,23 +222,6 @@ export default function UploadSlipLiff() {
     if (!response.ok) throw new Error(payload?.error || "อัปโหลดผ่าน server ไม่สำเร็จ");
     if (!payload?.url) throw new Error("Server upload succeeded but did not return slip URL.");
     return payload.url as string;
-  };
-
-  const uploadViaClientFallback = async (selectedFile: File) => {
-    if (!advId || !advanceInfo) throw new Error("ข้อมูลใบเบิกไม่ครบถ้วน");
-    const fileExtension = selectedFile.name.split(".").pop() || "jpg";
-    const fileName = `slip_${advId}_${Date.now()}.${fileExtension}`;
-    const storageRef = ref(storage, `slips/${advId}/${fileName}`);
-    const uploadResult = await uploadBytes(storageRef, selectedFile);
-    const downloadUrl = await getDownloadURL(uploadResult.ref);
-    await updateDoc(doc(db, "advances", advanceInfo.docId), {
-      status: "WAITING_CLEARANCE",
-      slipUrl: downloadUrl,
-      transferSlipUrl: downloadUrl,
-      transferCompletedAt: serverTimestamp(),
-      transferUpdatedFrom: "line_liff",
-    });
-    return downloadUrl;
   };
 
   const handleSubmit = async () => {
