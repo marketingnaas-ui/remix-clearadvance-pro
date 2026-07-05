@@ -23,10 +23,13 @@ import AccountingReports from "./components/AccountingReports";
 import ProfileSettings from "./components/ProfileSettings";
 import UploadSlipLiff from "./components/UploadSlipLiff";
 import LiffAction from "./components/LiffAction";
-import { Employee, UserRole } from "./types";
+import LiffDocumentView from "./components/LiffDocumentView";
+import LiffDailyReport from "./components/LiffDailyReport";
+import { Employee, RolePermissionsConfig, UserRole } from "./types";
 import { db } from "./lib/firebase";
+import { getBottomNavActions, mergeRolePermissions, resolvePositionId } from "./lib/permissionEngine";
 import { doc, onSnapshot } from "firebase/firestore";
-import { LogOut, LayoutDashboard, Send, CheckSquare, Receipt, HardDrive, History, FileCheck2, User, ChevronRight, Settings, Plus, X as CloseIcon, BarChart3, TrendingUp, FileCheck, Lock, BookOpen } from "lucide-react";
+import { LogOut, LayoutDashboard, Send, CheckSquare, Receipt, HardDrive, History, FileCheck2, User, ChevronRight, Settings, Plus, X as CloseIcon, BarChart3, TrendingUp, FileCheck, Lock, BookOpen, Users, ArrowRightLeft } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 export default function App() {
@@ -39,6 +42,7 @@ export default function App() {
   const [editingDraftClearingId, setEditingDraftClearingId] = useState<string | null>(null);
   const [isFabOpen, setIsFabOpen] = useState(false);
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+  const [roleConfig, setRoleConfig] = useState<RolePermissionsConfig | undefined>(undefined);
 
   React.useEffect(() => {
     if (currentEmployee) {
@@ -73,6 +77,16 @@ export default function App() {
     return () => unsubscribe();
   }, [currentEmployee?.id]);
 
+  React.useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, "settings", "global"), (snap) => {
+      const data = snap.exists() ? snap.data() : {};
+      setRoleConfig(mergeRolePermissions(data.rolePermissions as RolePermissionsConfig | undefined));
+    }, (err) => {
+      console.warn("Could not load role permission config:", err);
+    });
+    return () => unsubscribe();
+  }, []);
+
   // Get mobile navigation items based on role
   const getMobileNavItems = () => {
     if (!currentEmployee) return [];
@@ -93,7 +107,7 @@ export default function App() {
       items.push({ id: "accounting", label: "ตรวจบัญชี", icon: FileCheck2 });
       items.push({ id: "doc_tracking", label: "ติดตามเอกสาร", icon: FileCheck });
       items.push({ id: "dbd", label: "DBD เบิกจ่าย", icon: BarChart3 });
-    } else if (currentEmployee.role === UserRole.ADMIN) {
+    } else if (isAdminUser) {
       items.push({ id: "approval", label: "อนุมัติ", icon: CheckSquare });
       items.push({ id: "accounting", label: "ตรวจบัญชี", icon: FileCheck2 });
       items.push({ id: "dbd", label: "DBD เบิกจ่าย", icon: BarChart3 });
@@ -102,6 +116,26 @@ export default function App() {
     // Always append "More" button at the end
     items.push({ id: "more", label: "เพิ่มเติม", icon: Settings });
     return items;
+  };
+
+  const getPositionMobileNavItems = () => {
+    if (!currentEmployee) return [];
+    return getBottomNavActions(currentEmployee, roleConfig).map((item) => ({
+      id: item.targetTab,
+      label: item.label,
+      icon: item.icon === "Send" ? Send
+        : item.icon === "Receipt" ? Receipt
+        : item.icon === "CheckSquare" ? CheckSquare
+        : item.icon === "ArrowRightLeft" ? ArrowRightLeft
+        : item.icon === "FileCheck2" ? FileCheck2
+        : item.icon === "FileCheck" ? FileCheck
+        : item.icon === "BarChart3" ? BarChart3
+        : item.icon === "TrendingUp" ? TrendingUp
+        : item.icon === "User" ? Users
+        : item.icon === "History" ? History
+        : item.icon === "Settings" ? Settings
+        : LayoutDashboard,
+    }));
   };
 
   const handleLoginSuccess = (employee: Employee) => {
@@ -116,8 +150,22 @@ export default function App() {
   };
 
   const searchParams = new URLSearchParams(window.location.search);
-  const isLiffActionRoute = window.location.pathname.includes("/liff/action") || ["approve", "reject"].includes(searchParams.get("action") || "");
-  const isUploadSlipRoute = window.location.pathname.includes("/liff/upload-slip");
+  const liffRoute = searchParams.get("route") || "";
+  const liffAction = searchParams.get("action") || "";
+  const liffDocumentId =
+    searchParams.get("adv_id") ||
+    searchParams.get("advId") ||
+    searchParams.get("id") ||
+    searchParams.get("docId") ||
+    searchParams.get("documentId") ||
+    searchParams.get("advanceId") ||
+    searchParams.get("advanceNo") ||
+    searchParams.get("documentNo") ||
+    "";
+  const isLiffActionRoute = window.location.pathname.includes("/liff/action") || liffRoute === "action" || ["approve", "reject"].includes(liffAction);
+  const isUploadSlipRoute = window.location.pathname.includes("/liff/upload-slip") || liffRoute === "upload-slip";
+  const isDocumentRoute = liffRoute === "document" || Boolean(liffDocumentId);
+  const isDailyReportRoute = liffRoute === "daily-report";
 
   if (isLiffActionRoute) {
     return <LiffAction />;
@@ -127,6 +175,14 @@ export default function App() {
     return <UploadSlipLiff />;
   }
 
+  if (isDailyReportRoute) {
+    return <LiffDailyReport />;
+  }
+
+  if (isDocumentRoute) {
+    return <LiffDocumentView />;
+  }
+
   if (!currentEmployee) {
     return (
       <div className="min-h-screen bg-stone-50 flex items-center justify-center" style={{ paddingTop: '0px', paddingBottom: '0px', paddingRight: '0px', paddingLeft: '0px' }}>
@@ -134,6 +190,9 @@ export default function App() {
       </div>
     );
   }
+
+  const currentPositionId = resolvePositionId(currentEmployee);
+  const isAdminUser = currentPositionId === "admin";
 
   return (
     <div className="min-h-screen bg-stone-50 flex flex-col font-sans" id="app_frame">
@@ -279,7 +338,7 @@ export default function App() {
             )}
 
             {/* Tab 3: Approval for Managers (MANAGER) */}
-            {(currentEmployee.role === UserRole.MANAGER || currentEmployee.role === UserRole.ADMIN) && (
+            {(currentEmployee.role === UserRole.MANAGER || isAdminUser) && (
               <button
                 onClick={() => setActiveTab("approval")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -315,7 +374,7 @@ export default function App() {
             )}
 
             {/* Tab 5: Accounting review (ACCOUNTANT / ADMIN) */}
-            {(currentEmployee.role === UserRole.ACCOUNTANT || currentEmployee.role === UserRole.ADMIN) && (
+            {(currentEmployee.role === UserRole.ACCOUNTANT || isAdminUser) && (
               <button
                 onClick={() => setActiveTab("accounting")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -333,7 +392,7 @@ export default function App() {
             )}
 
             {/* Tab 5.5: DBD Disbursement Reports (MANAGER / ACCOUNTANT / ADMIN) */}
-            {(currentEmployee.role === UserRole.MANAGER || currentEmployee.role === UserRole.ACCOUNTANT || currentEmployee.role === UserRole.ADMIN) && (
+            {(currentEmployee.role === UserRole.MANAGER || currentEmployee.role === UserRole.ACCOUNTANT || isAdminUser) && (
               <button
                 onClick={() => setActiveTab("dbd")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -351,7 +410,7 @@ export default function App() {
             )}
 
             {/* Tab 5.6: Project Cost Budgets (MANAGER / ADMIN) */}
-            {(currentEmployee.role === UserRole.MANAGER || currentEmployee.role === UserRole.ADMIN) && (
+            {(currentEmployee.role === UserRole.MANAGER || isAdminUser) && (
               <button
                 onClick={() => setActiveTab("project_costs")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -369,7 +428,7 @@ export default function App() {
             )}
 
             {/* Tab 5.1: Original Document Tracking (ACCOUNTANT / ADMIN) */}
-            {(currentEmployee.role === UserRole.ACCOUNTANT || currentEmployee.role === UserRole.ADMIN) && (
+            {(currentEmployee.role === UserRole.ACCOUNTANT || isAdminUser) && (
               <button
                 onClick={() => setActiveTab("doc_tracking")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -387,7 +446,7 @@ export default function App() {
             )}
 
             {/* Tab 5.2: Close Account & Settlements (ACCOUNTANT / ADMIN) */}
-            {(currentEmployee.role === UserRole.ACCOUNTANT || currentEmployee.role === UserRole.ADMIN) && (
+            {(currentEmployee.role === UserRole.ACCOUNTANT || isAdminUser) && (
               <button
                 onClick={() => setActiveTab("close_account")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -405,7 +464,7 @@ export default function App() {
             )}
 
             {/* Tab 5.3: Reports (ACCOUNTANT / ADMIN) */}
-            {(currentEmployee.role === UserRole.ACCOUNTANT || currentEmployee.role === UserRole.ADMIN) && (
+            {(currentEmployee.role === UserRole.ACCOUNTANT || isAdminUser) && (
               <button
                 onClick={() => setActiveTab("reports")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -458,7 +517,7 @@ export default function App() {
             )}
 
             {/* Expandable/Dedicated "เพิ่มเติม" section for Executives & Accountants (Manager, Accountant & Admin) */}
-            {(currentEmployee.role === UserRole.MANAGER || currentEmployee.role === UserRole.ADMIN || currentEmployee.role === UserRole.ACCOUNTANT) && (
+            {(currentEmployee.role === UserRole.MANAGER || isAdminUser || currentEmployee.role === UserRole.ACCOUNTANT) && (
               <div className="pt-2.5 mt-2 border-t border-stone-150/60 space-y-1">
                 <p className="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest px-3.5 mb-1.5">เพิ่มเติม (Additional)</p>
                 
@@ -495,7 +554,7 @@ export default function App() {
             )}
 
             {/* Tab 8: Admin Settings & Configurations (ADMIN ONLY) */}
-            {currentEmployee.role === UserRole.ADMIN && (
+            {isAdminUser && (
               <button
                 onClick={() => setActiveTab("admin")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -599,7 +658,7 @@ export default function App() {
           )}
 
           {activeTab === "dbd" && (
-            <DBDView />
+            <DBDView currentEmployee={currentEmployee} />
           )}
 
           {activeTab === "project_costs" && (
@@ -633,7 +692,7 @@ export default function App() {
       {/* Mobile Bottom Navigation Bar */}
       {currentEmployee && (
         <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-stone-200/80 shadow-[0_-4px_12px_rgba(0,0,0,0.03)] lg:hidden px-2 py-2.5 flex justify-around items-center pb-safe">
-          {getMobileNavItems().map((item) => {
+          {getPositionMobileNavItems().map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id || (item.id === "more" && isMoreMenuOpen);
             return (
@@ -774,7 +833,7 @@ export default function App() {
                     )}
 
                     {/* Show Admin Settings or extra tools for Admin inside More panel */}
-                    {currentEmployee.role === UserRole.ADMIN && (
+                    {isAdminUser && (
                       <>
                         <button
                           onClick={() => {

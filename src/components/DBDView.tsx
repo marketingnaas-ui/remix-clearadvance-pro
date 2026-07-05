@@ -4,6 +4,7 @@ import { db } from "../lib/firebase";
 import { exportToExcel } from "../lib/excelExport";
 import { getDocumentFormats, generateFormattedId, DocumentFormats, DEFAULT_DOCUMENT_FORMATS } from "../lib/idGenerator";
 import { Advance, AdvanceStatus, ClearingItem, Employee, ClearingLog } from "../types";
+import { filterAdvancesByVisibility } from "../lib/permissionEngine";
 import { 
   Search, 
   ChevronDown, 
@@ -22,7 +23,11 @@ import {
   FileSpreadsheet
 } from "lucide-react";
 
-export default function DBDView() {
+interface DBDViewProps {
+  currentEmployee?: Employee;
+}
+
+export default function DBDView({ currentEmployee }: DBDViewProps) {
   const [advances, setAdvances] = useState<Advance[]>([]);
   const [clearingItems, setClearingItems] = useState<ClearingItem[]>([]);
   const [clearingLogs, setClearingLogs] = useState<ClearingLog[]>([]);
@@ -65,7 +70,7 @@ export default function DBDView() {
     const unsubAdvances = onSnapshot(collection(db, "advances"), (snap) => {
       const list: Advance[] = [];
       snap.forEach((d) => list.push({ id: d.id, ...d.data() } as Advance));
-      setAdvances(list);
+      setAdvances(currentEmployee ? filterAdvancesByVisibility(currentEmployee, list) : list);
       advancesDone = true;
       checkDone();
     }, (err) => {
@@ -116,7 +121,7 @@ export default function DBDView() {
       unsubClearingLogs();
       unsubEmployees();
     };
-  }, []);
+  }, [currentEmployee]);
 
   // Build employee lookup map
   const employeeMap = new Map<string, Employee>();

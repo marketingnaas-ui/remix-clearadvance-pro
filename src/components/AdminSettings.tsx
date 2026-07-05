@@ -12,9 +12,12 @@ import {
   setDoc, 
   updateDoc, 
   getDoc,
-  deleteDoc 
+  deleteDoc,
+  query,
+  orderBy,
+  limit
 } from "firebase/firestore";
-import { db, hashPIN } from "../lib/firebase";
+import { db, firebaseParams, hashPIN } from "../lib/firebase";
 import { exportToExcel } from "../lib/excelExport";
 import * as XLSX from "xlsx";
 import { Employee, UserRole, AuditLog, ActionType, AISettings, AIUsageLog } from "../types";
@@ -73,6 +76,7 @@ import AdvanceManagement from "./master-data/AdvanceManagement";
 import ClearingHistory from "./master-data/ClearingHistory";
 import ExpenseItems from "./master-data/ExpenseItems";
 import DataCollectionManager from "./DataCollectionManager";
+import RoleApprovalMatrix from "./RoleApprovalMatrix";
 import { COLLECTION_SCHEMAS } from "../lib/collectionSchemas";
 
 interface AdminSettingsProps {
@@ -86,8 +90,15 @@ export interface LineMessageTrigger {
   messageTemplate: string;
   type?: "text" | "flex";
   altText?: string;
-  recipientMode?: "approvers" | "requester" | "accounting" | "all" | "target";
+  recipientMode?: "approvers" | "requester" | "accounting" | "all" | "target" | "custom";
   recipientRoles?: UserRole[];
+  recipientRoleIds?: string[];
+  sendToGroup?: boolean;
+  sendToUsers?: string[];
+  alsoSendToRequester?: boolean;
+  useApprovalWorkflowRules?: boolean;
+  includeLiffActions?: boolean;
+  liffActionMode?: "approveReject" | "uploadSlip" | "viewOnly" | "none";
 }
 
 interface ApprovalConditionRule {
@@ -122,6 +133,11 @@ const LINE_VARIABLES = [
   { name: "{weeklySummary}", desc: "สรุปรายงานประจำสัปดาห์" },
   { name: "{outstandingSummary}", desc: "สรุปรายการคงค้าง" },
 ];
+
+LINE_VARIABLES.push(
+  { name: "{dailyReportUrl}", desc: "LIFF daily executive report URL" },
+  { name: "{topProjectsSummary}", desc: "Top pending approval projects" },
+);
 
 const stringifyFlex = (contents: any) => JSON.stringify(contents, null, 2);
 
@@ -232,6 +248,40 @@ const reportFlex = (title: string, summaryVar: string) => ({
   body: { type: "box", layout: "vertical", spacing: "sm", contents: [infoRow("ช่วงวันที่", "{dateRange}"), infoRow("คงค้าง", "{outstandingAmount}"), infoRow("รออนุมัติ", "{waitingApprovalCount} รายการ"), infoRow("รอเคลียร์", "{waitingClearanceCount} รายการ"), { type: "separator", margin: "md" }, { type: "text", text: summaryVar, wrap: true, size: "xs", color: "#2E2E2E", margin: "md" }] },
 });
 
+const dailyExecutiveReportFlex = () => ({
+  type: "bubble",
+  size: "mega",
+  header: {
+    type: "box",
+    layout: "vertical",
+    backgroundColor: "#111827",
+    paddingAll: "16px",
+    contents: [
+      { type: "text", text: "Daily Executive Report", weight: "bold", size: "lg", color: "#FFFFFF", align: "center" },
+      { type: "text", text: "{dateRange}", size: "sm", color: "#D1D5DB", align: "center", margin: "sm" },
+    ],
+  },
+  body: {
+    type: "box",
+    layout: "vertical",
+    spacing: "sm",
+    contents: [
+      infoRow("Pending", "{waitingApprovalCount} items", "#111827"),
+      infoRow("Outstanding", "{outstandingAmount}", "#111827"),
+      { type: "separator", margin: "md" },
+      { type: "text", text: "{dailySummary}", wrap: true, size: "sm", color: "#374151" },
+      { type: "text", text: "{topProjectsSummary}", wrap: true, size: "xs", color: "#6B7280", margin: "md" },
+    ],
+  },
+  footer: {
+    type: "box",
+    layout: "vertical",
+    contents: [
+      { type: "button", style: "primary", color: "#111827", action: { type: "uri", label: "Open LIFF Report", uri: "{dailyReportUrl}" } },
+    ],
+  },
+});
+
 const buildSystemLineTriggers = (): LineMessageTrigger[] => [
   { id: "onNewRequest", name: "ขออนุมัติรายการเบิกใหม่", isActive: true, type: "flex", altText: "มีรายการขออนุมัติใหม่ {advId}", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ADMIN], messageTemplate: stringifyFlex(approvalRequestFlex()) },
   { id: "onManagerApproval", name: "อนุมัติแล้ว ส่งให้บัญชี/ผู้ขอเบิก", isActive: true, type: "flex", altText: "รายการ {advId} อนุมัติแล้ว", recipientMode: "accounting", recipientRoles: [UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("อนุมัติรายการแล้ว", "รายการ {advId} ได้รับอนุมัติแล้ว รอขั้นตอนบัญชีและโอนเงิน")) },
@@ -244,6 +294,18 @@ const buildSystemLineTriggers = (): LineMessageTrigger[] => [
   { id: "outstandingReport", name: "รายการคงค้าง / Quick Reply", isActive: true, type: "flex", altText: "รายการคงค้าง ClearAdvance", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex({ contents: reportFlex("รายการคงค้าง", "{outstandingSummary}"), quickReply: { items: [{ type: "action", action: { type: "postback", label: "รายงานวันนี้", data: "report=daily" } }, { type: "action", action: { type: "postback", label: "รายงานสัปดาห์", data: "report=weekly" } }, { type: "action", action: { type: "postback", label: "คงค้าง", data: "report=outstanding" } }] } }) },
 ];
 
+const buildCommand3LineTriggers = (): LineMessageTrigger[] => {
+  const defaults = buildSystemLineTriggers();
+  const extraTriggers: LineMessageTrigger[] = [
+    { id: "onTransferCompleted", name: "โอนเงินสำเร็จ", isActive: true, type: "flex", altText: "โอนเงินสำเร็จ {advId}", recipientMode: "requester", messageTemplate: stringifyFlex(reportFlex("โอนเงินสำเร็จ", "รายการ {advId} โอนเงินแล้ว จำนวน {amount}")) },
+    { id: "onAccountingReview", name: "บัญชีตรวจสอบเอกสาร", isActive: true, type: "flex", altText: "บัญชีตรวจสอบเอกสาร {advId}", recipientMode: "accounting", recipientRoles: [UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("รอตรวจสอบเอกสาร", "รายการ {advId} รอฝ่ายบัญชีตรวจสอบเอกสาร")) },
+    { id: "onAccountingReturn", name: "บัญชีตีกลับเอกสาร", isActive: true, type: "flex", altText: "ตีกลับเอกสาร {advId}", recipientMode: "requester", alsoSendToRequester: true, messageTemplate: stringifyFlex(reportFlex("ตีกลับเอกสาร", "รายการ {advId} ถูกตีกลับ เหตุผล: {rejectReason}")) },
+    { id: "dailyExecutiveReport", name: "รายงานผู้บริหารรายวัน", isActive: true, type: "flex", altText: "รายงานผู้บริหารรายวัน ClearAdvance", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ADMIN], sendToGroup: true, useApprovalWorkflowRules: false, includeLiffActions: true, liffActionMode: "viewOnly", messageTemplate: stringifyFlex(dailyExecutiveReportFlex()) },
+  ];
+  const existingIds = new Set(defaults.map((trigger) => trigger.id));
+  return [...defaults, ...extraTriggers.filter((trigger) => !existingIds.has(trigger.id))];
+};
+
 type AdminSubTab =
   | "users"
   | "projects"
@@ -252,6 +314,7 @@ type AdminSubTab =
   | "ai_bot"
   | "ai_ocr"
   | "document_numbers"
+  | "role_matrix"
   | "approval_workflow"
   | "workspace"
   | "doc_templates"
@@ -426,7 +489,14 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   const [lineChannelSecret, setLineChannelSecret] = useState("");
   const [lineLiffId, setLineLiffId] = useState("");
   const [lineGroupId, setLineGroupId] = useState("");
-  const [lineTriggers, setLineTriggers] = useState<LineMessageTrigger[]>(buildSystemLineTriggers());
+  const [lineGroupName, setLineGroupName] = useState("");
+  const [lineEnableGroupNotification, setLineEnableGroupNotification] = useState(false);
+  const [lineAppBaseUrl, setLineAppBaseUrl] = useState("");
+  const [lineTestAdvances, setLineTestAdvances] = useState<any[]>([]);
+  const [selectedLineTestAdvId, setSelectedLineTestAdvId] = useState("");
+  const [lineLastResponse, setLineLastResponse] = useState<any>(null);
+  const [firebaseDebugInfo, setFirebaseDebugInfo] = useState<any>(null);
+  const [lineTriggers, setLineTriggers] = useState<LineMessageTrigger[]>(buildCommand3LineTriggers());
   const [previewTriggerId, setPreviewTriggerId] = useState<string>("onNewRequest");
   const [newLineTriggerName, setNewLineTriggerName] = useState("");
   const [newLineTriggerTemplate, setNewLineTriggerTemplate] = useState("");
@@ -588,6 +658,18 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
       });
       setEmployees(empList);
 
+      const advanceSnap = await getDocs(query(collection(db, "advances"), orderBy("createdAt", "desc"), limit(50)));
+      const advanceList: any[] = advanceSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
+      setLineTestAdvances(advanceList);
+      setSelectedLineTestAdvId((prev) => prev || String(advanceList[0]?.advId || advanceList[0]?.advanceNo || advanceList[0]?.documentNo || advanceList[0]?.id || ""));
+
+      try {
+        const debugRes = await fetch("/api/debug/firebase-info");
+        if (debugRes.ok) setFirebaseDebugInfo(await debugRes.json());
+      } catch (debugErr) {
+        console.warn("Cannot load backend Firebase debug info:", debugErr);
+      }
+
       // 2. Fetch Settings
       const settingsRef = doc(db, "settings", "global");
       const settingsSnap = await getDoc(settingsRef);
@@ -629,9 +711,19 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
           setLineChannelSecret(data.lineMessagingConfig.channelSecret || "");
           setLineLiffId(data.lineMessagingConfig.liffId || "");
           setLineGroupId(data.lineMessagingConfig.groupId || data.lineMessagingConfig.lineGroupId || "");
+          setLineGroupName(data.lineMessagingConfig.groupName || "");
+          setLineEnableGroupNotification(Boolean(data.lineMessagingConfig.enableGroupNotification));
+          setLineAppBaseUrl(data.lineMessagingConfig.appBaseUrl || data.lineMessagingConfig.liffEndpointUrl || window.location.origin);
           if (data.lineMessagingConfig.triggers) {
-            setLineTriggers(data.lineMessagingConfig.triggers);
+            const savedTriggers = data.lineMessagingConfig.triggers as LineMessageTrigger[];
+            const savedIds = new Set(savedTriggers.map((trigger) => trigger.id));
+            setLineTriggers([
+              ...savedTriggers,
+              ...buildCommand3LineTriggers().filter((trigger) => !savedIds.has(trigger.id)),
+            ]);
           }
+        } else {
+          setLineAppBaseUrl(window.location.origin);
         }
 
         // Load docTemplate
@@ -1041,6 +1133,66 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
     }
   };
 
+  const buildLineUrlConfig = () => {
+    const appBaseUrl = (lineAppBaseUrl || window.location.origin || "https://aistudio.google.com").trim().replace(/\/$/, "");
+    const liffBaseUrl = lineLiffId ? `https://liff.line.me/${lineLiffId}` : "";
+    return {
+      appBaseUrl,
+      webhookUrl: `${appBaseUrl}/api/line/webhook`,
+      liffEndpointUrl: appBaseUrl,
+      liffBaseUrl,
+      approveUrlTemplate: lineLiffId ? `${liffBaseUrl}?route=action&action=approve&adv_id={advId}` : "",
+      rejectUrlTemplate: lineLiffId ? `${liffBaseUrl}?route=action&action=reject&adv_id={advId}` : "",
+      uploadSlipUrlTemplate: lineLiffId ? `${liffBaseUrl}?route=upload-slip&adv_id={advId}` : "",
+      viewDocumentUrlTemplate: lineLiffId ? `${liffBaseUrl}?route=document&adv_id={advId}` : "",
+      dailyReportUrlTemplate: lineLiffId ? `${liffBaseUrl}?route=daily-report&date={date}` : "",
+    };
+  };
+
+  const lineUrlConfig = buildLineUrlConfig();
+  const selectedLineTestAdvance = lineTestAdvances.find((advance) =>
+    [advance.advId, advance.advanceNo, advance.documentNo, advance.id].filter(Boolean).includes(selectedLineTestAdvId)
+  ) || lineTestAdvances[0];
+  const selectedRealAdvId = String(selectedLineTestAdvId || selectedLineTestAdvance?.advId || selectedLineTestAdvance?.advanceNo || selectedLineTestAdvance?.documentNo || selectedLineTestAdvance?.id || "");
+  const linePreviewWarning = lineUrlConfig.appBaseUrl.includes("aistudio.google.com");
+  const firebaseProjectMismatch = Boolean(firebaseDebugInfo?.backendProjectId && firebaseParams.projectId && firebaseDebugInfo.backendProjectId !== firebaseParams.projectId);
+  const buildConcreteLineUrl = (template: string) => template
+    .replace("{advId}", encodeURIComponent(selectedRealAdvId))
+    .replace("{date}", new Date().toISOString().slice(0, 10));
+  const openLineTestUrl = (template: string) => {
+    if (!selectedRealAdvId && template.includes("{advId}")) {
+      setLineLastResponse({ status: "missing_advance", message: "กรุณาสร้างใบเบิกก่อนเพื่อใช้ใบจริงสำหรับทดสอบ" });
+      return;
+    }
+    const url = buildConcreteLineUrl(template);
+    setLineLastResponse({ status: "opened", url });
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const testLineNotification = async (options: { forceMode?: string; send?: boolean; triggerId?: string } = {}) => {
+    const triggerId = options.triggerId || previewTriggerId || "dailyExecutiveReport";
+    setLineLastResponse({ status: "testing", triggerId, forceMode: options.forceMode || "trigger" });
+    try {
+      const response = await fetch("/api/line/test-notification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          triggerId,
+          send: Boolean(options.send),
+          forceMode: options.forceMode,
+          variables: {
+            advId: selectedRealAdvId,
+            reportDate: new Date().toISOString().slice(0, 10),
+          },
+        }),
+      });
+      const payload = await response.json().catch(() => ({ status: "invalid_json" }));
+      setLineLastResponse({ httpStatus: response.status, ...payload });
+    } catch (err: any) {
+      setLineLastResponse({ status: "error", error: err?.message || String(err) });
+    }
+  };
+
   const handleSaveLineSettings = async () => {
     setSaving(true);
     setError(null);
@@ -1050,14 +1202,18 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
       if (invalidFlex) {
         throw new Error(`Flex Message JSON ของ "${invalidFlex.name}" ไม่ถูกต้อง กรุณาแก้ไขก่อนบันทึก`);
       }
+      const lineUrls = buildLineUrlConfig();
       const settingsRef = doc(db, "settings", "global");
       await setDoc(settingsRef, {
         lineMessagingConfig: {
+          ...lineUrls,
           channelAccessToken: lineChannelAccessToken,
           channelSecret: lineChannelSecret,
           liffId: lineLiffId,
           groupId: lineGroupId.trim(),
           lineGroupId: lineGroupId.trim(),
+          groupName: lineGroupName.trim(),
+          enableGroupNotification: lineEnableGroupNotification,
           triggers: lineTriggers
         }
       }, { merge: true });
@@ -2097,7 +2253,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   };
 
   const sampleLineVariables: Record<string, string> = {
-    advId: "ADV-2607-0018",
+    advId: selectedRealAdvId || "ADV-REAL",
     employeeName: "สมชาย ใจดี",
     amount: "5,000 บาท",
     status: "รออนุมัติ",
@@ -2107,7 +2263,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
     date: new Date().toLocaleDateString("th-TH"),
     neededDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString("th-TH"),
     rejectReason: "กรุณาแนบเอกสารใบเสนอราคา (Quotation) จากร้านค้าให้ครบถ้วนก่อนทำการเบิก",
-    liffSlipUrl: lineLiffId ? `https://liff.line.me/${lineLiffId}?adv_id=ADV-2607-0018` : "https://example.com/liff/upload-slip?adv_id=ADV-2607-0018",
+    liffSlipUrl: selectedRealAdvId ? buildConcreteLineUrl(lineUrlConfig.uploadSlipUrlTemplate) : lineUrlConfig.uploadSlipUrlTemplate,
     profileImageUrl: "https://placehold.co/320x320/png?text=Profile",
     outstandingShort: "12.5K",
     totalAdvanceShort: "48K",
@@ -2122,6 +2278,9 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
     weeklySummary: "สัปดาห์นี้มียอดเบิก 185,000 บาท ปิดยอดแล้ว 96,000 บาท",
     outstandingSummary: "มีรายการคงค้าง 8 รายการ ยอดรวม 125,000 บาท ควรติดตาม 3 รายการที่เกินกำหนด",
   };
+
+  sampleLineVariables.dailyReportUrl = lineUrlConfig.dailyReportUrlTemplate ? buildConcreteLineUrl(lineUrlConfig.dailyReportUrlTemplate) : "";
+  sampleLineVariables.topProjectsSummary = "Project Alpha: 2 / 80,000\nProject Beta: 1 / 45,000";
 
   const replaceLineVariables = (template: string) =>
     Object.entries(sampleLineVariables).reduce(
@@ -2489,6 +2648,21 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
         </button>
         <button
           onClick={() => {
+            setActiveSubTab("role_matrix");
+            setError(null);
+            setSuccess(null);
+          }}
+          className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all ${
+            activeSubTab === "role_matrix"
+              ? "bg-stone-950 text-stone-50 shadow-sm"
+              : "text-stone-600 hover:bg-stone-100"
+          }`}
+        >
+          <ShieldCheck className="w-4 h-4" />
+          Role & Approval Matrix
+        </button>
+        <button
+          onClick={() => {
             setActiveSubTab("approval_workflow");
             setError(null);
             setSuccess(null);
@@ -2655,6 +2829,10 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                   </div>
                 )}
               </div>
+            )}
+
+            {activeSubTab === "role_matrix" && (
+              <RoleApprovalMatrix />
             )}
 
             {/* SUB TAB: User Management */}
@@ -5309,7 +5487,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                 type="button"
                 onClick={() => {
                   if (!window.confirm("โหลดเทมเพลต LINE มาตรฐานใหม่? ข้อความที่แก้ไว้ในหน้านี้จะถูกแทนที่")) return;
-                  const defaults = buildSystemLineTriggers();
+                  const defaults = buildCommand3LineTriggers();
                   setLineTriggers(defaults);
                   setPreviewTriggerId(defaults[0]?.id || "");
                 }}
@@ -5348,6 +5526,21 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                 </div>
 
                 <div className="space-y-4">
+                 <div className="space-y-2">
+                   <label className="text-xs font-bold text-stone-700 block">App Base URL</label>
+                   <input
+                      type="text"
+                      placeholder="https://your-production-app.example.com"
+                      value={lineAppBaseUrl}
+                      onChange={(e) => setLineAppBaseUrl(e.target.value)}
+                      className="w-full max-w-2xl px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
+                   />
+                   {linePreviewWarning && (
+                     <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                       พบ aistudio.google.com: URL นี้เป็น Preview URL ควรเปลี่ยนเป็น URL production ก่อนใช้งานจริงกับ LINE
+                     </p>
+                   )}
+                 </div>
                  <div className="space-y-2">
                    <label className="text-xs font-bold text-stone-700 block">LINE Channel Access Token</label>
                    <input
@@ -5393,6 +5586,78 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                  </div>
                </div>
                
+                <div className="pt-4 border-t border-stone-100 space-y-4">
+                  <h4 className="text-xs font-bold text-stone-800 uppercase tracking-wider">LIFF URL Generator</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-stone-700 block">LINE Group Name</label>
+                      <input
+                        type="text"
+                        placeholder="ชื่อกลุ่ม LINE"
+                        value={lineGroupName}
+                        onChange={(e) => setLineGroupName(e.target.value)}
+                        className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs"
+                      />
+                    </div>
+                    <label className="inline-flex items-center gap-2 text-xs font-bold text-stone-700 self-end pb-2">
+                      <input
+                        type="checkbox"
+                        checked={lineEnableGroupNotification}
+                        onChange={(e) => setLineEnableGroupNotification(e.target.checked)}
+                        className="w-4 h-4 rounded border-stone-300"
+                      />
+                      Enable group notification
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                    {Object.entries(lineUrlConfig).map(([key, value]) => (
+                      <div key={key} className="rounded-xl bg-stone-50 border border-stone-200 p-3">
+                        <div className="text-[10px] font-black text-stone-500 uppercase">{key}</div>
+                        <div className="text-[11px] font-mono text-stone-800 break-all mt-1">{String(value || "-")}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="rounded-xl border border-stone-200 bg-white p-3 space-y-3">
+                    <label className="text-xs font-bold text-stone-700 block">เลือกใบเบิกจริงสำหรับทดสอบ LIFF</label>
+                    {lineTestAdvances.length ? (
+                      <select
+                        value={selectedLineTestAdvId}
+                        onChange={(e) => setSelectedLineTestAdvId(e.target.value)}
+                        className="w-full max-w-xl px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-xs font-bold"
+                      >
+                        {lineTestAdvances.map((advance) => {
+                          const value = String(advance.advId || advance.advanceNo || advance.documentNo || advance.id);
+                          return <option key={advance.id} value={value}>{value} - {advance.employeeName || advance.requesterName || "-"} - {Number(advance.requestAmount || advance.amount || 0).toLocaleString("th-TH")}</option>;
+                        })}
+                      </select>
+                    ) : (
+                      <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">สามารถใช้ใบจริงสำหรับทดสอบสร้างใบเบิกก่อน</p>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" disabled={!selectedRealAdvId} onClick={() => openLineTestUrl(lineUrlConfig.approveUrlTemplate)} className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold disabled:opacity-50">Test Approve</button>
+                      <button type="button" disabled={!selectedRealAdvId} onClick={() => openLineTestUrl(lineUrlConfig.rejectUrlTemplate)} className="px-3 py-2 rounded-xl bg-red-600 text-white text-xs font-bold disabled:opacity-50">Test Reject</button>
+                      <button type="button" disabled={!selectedRealAdvId} onClick={() => openLineTestUrl(lineUrlConfig.uploadSlipUrlTemplate)} className="px-3 py-2 rounded-xl bg-stone-950 text-white text-xs font-bold disabled:opacity-50">Test Upload Slip</button>
+                      <button type="button" disabled={!selectedRealAdvId} onClick={() => openLineTestUrl(lineUrlConfig.viewDocumentUrlTemplate)} className="px-3 py-2 rounded-xl bg-stone-700 text-white text-xs font-bold disabled:opacity-50">Test View Document</button>
+                      <button type="button" onClick={() => openLineTestUrl(lineUrlConfig.dailyReportUrlTemplate)} className="px-3 py-2 rounded-xl bg-blue-700 text-white text-xs font-bold">Test Daily Report</button>
+                      <button type="button" onClick={() => testLineNotification({ send: false })} className="px-3 py-2 rounded-xl bg-white border border-stone-300 text-stone-800 text-xs font-bold">Test Bot Connection</button>
+                      <button type="button" onClick={() => testLineNotification({ forceMode: "group", send: true })} className="px-3 py-2 rounded-xl bg-green-600 text-white text-xs font-bold">Test Send to Group</button>
+                      <button type="button" disabled={!selectedRealAdvId} onClick={() => testLineNotification({ forceMode: "approvers", send: true })} className="px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold disabled:opacity-50">Test Send to Approvers</button>
+                      <button type="button" onClick={() => testLineNotification({ send: true })} className="px-3 py-2 rounded-xl bg-stone-900 text-white text-xs font-bold">Test Trigger</button>
+                    </div>
+                    {firebaseProjectMismatch && (
+                      <p className="text-[10px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                        ส่วนหน้าและแบ็กเอนด์ใช้ Firebase คนละโครงการโดยไม่ต้อง LIFF ค้นหาเอกสารที่น่ารังเกียจ
+                      </p>
+                    )}
+                    <div className="text-[10px] text-stone-500">
+                      Frontend Firebase projectId: <span className="font-mono font-bold">{firebaseParams.projectId || "-"}</span> | Backend projectId: <span className="font-mono font-bold">{firebaseDebugInfo?.backendProjectId || "-"}</span>
+                    </div>
+                    {lineLastResponse && (
+                      <pre className="max-h-40 overflow-auto rounded-xl bg-stone-950 text-stone-50 p-3 text-[11px]">{JSON.stringify(lineLastResponse, null, 2)}</pre>
+                    )}
+                  </div>
+                </div>
+
                 <div className="pt-4 border-t border-stone-100 space-y-4">
                   <h4 className="text-xs font-bold text-stone-800 uppercase tracking-wider mb-2">รูปแบบข้อความแจ้งเตือน (Notification Triggers)</h4>
                   
@@ -5481,6 +5746,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                                   <option value="accounting">บัญชี</option>
                                   <option value="target">พนักงานเป้าหมาย</option>
                                   <option value="all">ทุกคนที่ผูก LINE</option>
+                                  <option value="custom">Custom LINE users</option>
                                 </select>
                               </div>
                             </div>
@@ -5503,6 +5769,66 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                                   {role}
                                 </label>
                               ))}
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                              <input
+                                type="text"
+                                value={(trigger.recipientRoleIds || []).join(", ")}
+                                placeholder="Role IDs for recipients, comma separated"
+                                onChange={(e) => {
+                                  const updated = [...lineTriggers];
+                                  updated[idx].recipientRoleIds = e.target.value.split(",").map((value) => value.trim()).filter(Boolean);
+                                  setLineTriggers(updated);
+                                }}
+                                className="w-full text-xs bg-white border border-stone-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-stone-950"
+                              />
+                              <input
+                                type="text"
+                                value={(trigger.sendToUsers || []).join(", ")}
+                                placeholder="Custom LINE user IDs, comma separated"
+                                onChange={(e) => {
+                                  const updated = [...lineTriggers];
+                                  updated[idx].sendToUsers = e.target.value.split(",").map((value) => value.trim()).filter(Boolean);
+                                  setLineTriggers(updated);
+                                }}
+                                className="w-full text-xs bg-white border border-stone-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-stone-950"
+                              />
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {[
+                                ["sendToGroup", "Send group"],
+                                ["alsoSendToRequester", "Also requester"],
+                                ["useApprovalWorkflowRules", "Workflow rules"],
+                                ["includeLiffActions", "LIFF actions"],
+                              ].map(([key, label]) => (
+                                <label key={key} className="inline-flex items-center gap-1 text-[10px] font-bold text-stone-600 bg-white border border-stone-200 rounded-lg px-2 py-1">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean((trigger as any)[key])}
+                                    onChange={(e) => {
+                                      const updated = [...lineTriggers];
+                                      (updated[idx] as any)[key] = e.target.checked;
+                                      setLineTriggers(updated);
+                                    }}
+                                    className="w-3 h-3 rounded border-stone-300"
+                                  />
+                                  {label}
+                                </label>
+                              ))}
+                              <select
+                                value={trigger.liffActionMode || "none"}
+                                onChange={(e) => {
+                                  const updated = [...lineTriggers];
+                                  updated[idx].liffActionMode = e.target.value as LineMessageTrigger["liffActionMode"];
+                                  setLineTriggers(updated);
+                                }}
+                                className="text-[10px] font-bold bg-white border border-stone-200 rounded-lg px-2 py-1"
+                              >
+                                <option value="none">No LIFF action</option>
+                                <option value="approveReject">Approve / Reject</option>
+                                <option value="uploadSlip">Upload slip</option>
+                                <option value="viewOnly">View only</option>
+                              </select>
                             </div>
                             <textarea
                               value={trigger.messageTemplate}

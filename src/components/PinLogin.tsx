@@ -9,6 +9,7 @@ import { db, hashPIN } from "../lib/firebase";
 import { Employee, UserRole } from "../types";
 import { getDocumentFormats, generateFormattedId } from "../lib/idGenerator";
 import { triggerAutoSyncSheetsIfEnabled } from "../lib/workspaceSync";
+import { normalizeEmployeeLineUserId } from "../lib/permissionEngine";
 import { 
   Shield, 
   Key, 
@@ -79,6 +80,9 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
         username: "admin",
         name: "วิชัย สมาร์ทแอดมิน (Admin)",
         role: UserRole.ADMIN,
+        roleId: "admin",
+        positionId: "admin",
+        positionName: "Admin",
         pinHash: adminPinHash,
         plainPin: "999999",
         bankName: "ธนาคารกสิกรไทย (KBANK)",
@@ -96,6 +100,9 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
         username: "manager",
         name: "สมศักดิ์ รักองค์กร (Manager)",
         role: UserRole.MANAGER,
+        roleId: "manager",
+        positionId: "manager",
+        positionName: "Manager",
         pinHash: managerPinHash,
         plainPin: "111111",
         bankName: "ธนาคารไทยพาณิชย์ (SCB)",
@@ -113,6 +120,9 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
         username: "accountant",
         name: "เพ็ญศรี บัญชีละเอียด (Accountant)",
         role: UserRole.ACCOUNTANT,
+        roleId: "accountant",
+        positionId: "accountant",
+        positionName: "Accountant",
         pinHash: acctPinHash,
         plainPin: "222222",
         bankName: "ธนาคารกรุงเทพ (BBL)",
@@ -130,6 +140,9 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
         username: "employee",
         name: "สมยศ ทำงานดี (Employee)",
         role: UserRole.EMPLOYEE,
+        roleId: "employee",
+        positionId: "employee",
+        positionName: "Employee",
         pinHash: staffPinHash,
         plainPin: "333333",
         bankName: "ธนาคารกรุงไทย (KTB)",
@@ -295,9 +308,10 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
         setAutoLogining(true);
         setSuccessMsg(`ตรวจพบ LINE Account เชื่อมโยงกับพนักงาน "${matchedEmp.name}" กำลังเข้าสู่ระบบอัตโนมัติ...`);
         setTimeout(() => {
+          const normalizedEmp = normalizeEmployeeLineUserId(matchedEmp);
           onLoginSuccess({
-            ...matchedEmp,
-            uid: matchedEmp.id
+            ...normalizedEmp,
+            uid: normalizedEmp.uid || matchedEmp.id
           });
         }, 1500);
       }
@@ -397,9 +411,14 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
         }
       }
 
+      const normalizedEmp = normalizeEmployeeLineUserId(emp);
+      if (normalizedEmp.lineUserId && normalizedEmp.lineUserId !== emp.lineUserId) {
+        await setDoc(doc(db, "employees", emp.id), { lineUserId: normalizedEmp.lineUserId }, { merge: true });
+      }
+
       onLoginSuccess({
-        ...emp,
-        uid: emp.id
+        ...normalizedEmp,
+        uid: normalizedEmp.uid || emp.id
       });
     } catch (err) {
       console.error(err);

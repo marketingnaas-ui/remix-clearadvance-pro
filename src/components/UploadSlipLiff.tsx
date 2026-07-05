@@ -47,8 +47,27 @@ const getAdvanceByCode = async (advCode: string) => {
     return { docId: advDoc.id, data: advDoc.data() };
   }
 
+  for (const field of ["documentNo", "id", "requestNo"]) {
+    const snap = await getDocs(query(collection(db, "advances"), where(field, "==", advCode), limit(1)));
+    if (!snap.empty) {
+      const advDoc = snap.docs[0];
+      return { docId: advDoc.id, data: advDoc.data() };
+    }
+  }
+
   return null;
 };
+
+const resolveDocumentId = (urlParams: URLSearchParams) =>
+  urlParams.get("adv_id") ||
+  urlParams.get("advId") ||
+  urlParams.get("id") ||
+  urlParams.get("docId") ||
+  urlParams.get("documentId") ||
+  urlParams.get("advanceId") ||
+  urlParams.get("advanceNo") ||
+  urlParams.get("documentNo") ||
+  "";
 
 const getEmployeeById = async (employeeId?: string) => {
   if (!employeeId) return null;
@@ -115,7 +134,7 @@ export default function UploadSlipLiff() {
     const initApp = async () => {
       try {
         const urlParams = new URLSearchParams(window.location.search);
-        const currentAdvId = urlParams.get("adv_id") || urlParams.get("advId") || urlParams.get("id");
+        const currentAdvId = resolveDocumentId(urlParams);
         if (!currentAdvId) throw new Error("ไม่พบเลขที่ ADV จากลิงก์");
 
         setAdvId(currentAdvId);

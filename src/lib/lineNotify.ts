@@ -35,3 +35,23 @@ export async function sendLineNotification(payload: LineNotificationPayload): Pr
     return null;
   }
 }
+
+export async function sendLineBindInvite(employeeId: string): Promise<any | null> {
+  try {
+    const res = await fetch("/api/line/send-bind-invite", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ employeeId }),
+    });
+    const data = await res.json().catch(async () => ({ raw: await res.text() }));
+    if (!res.ok || data.status === "error") {
+      console.warn("Failed to send LINE bind invite:", data);
+    }
+    return data;
+  } catch (err) {
+    console.error("Error sending LINE bind invite:", err);
+    return null;
+  }
+}

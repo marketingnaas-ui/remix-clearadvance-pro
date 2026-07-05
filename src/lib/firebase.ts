@@ -10,7 +10,7 @@ import { getStorage } from "firebase/storage";
 import firebaseConfig from "../../firebase-applet-config.json";
 
 // Initialize Firebase App
-const firebaseParams = {
+export const firebaseParams = {
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseConfig.projectId,
   appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseConfig.appId,
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey,
