@@ -1172,30 +1172,54 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   const testLineNotification = async (options: { forceMode?: string; send?: boolean; triggerId?: string } = {}) => {
     const triggerId = options.triggerId || previewTriggerId || "dailyExecutiveReport";
     setLineLastResponse({ status: "testing", triggerId, forceMode: options.forceMode || "trigger" });
-    try {
-      const apiBaseUrl = (lineUrlConfig.appBaseUrl || window.location.origin).replace(/\/$/, "");
-      const requestUrl = `${apiBaseUrl}/api/line/test-notification`;
+    const requestBody = {
+      triggerId,
+      send: Boolean(options.send),
+      forceMode: options.forceMode,
+      variables: {
+        advId: selectedRealAdvId,
+        reportDate: new Date().toISOString().slice(0, 10),
+      },
+    };
+    const parseLineTestResponse = async (response: Response) => {
+      const responseText = await response.text();
+      try {
+        return responseText ? JSON.parse(responseText) : {};
+      } catch {
+        return { status: "invalid_json", raw: responseText.slice(0, 1000) };
+      }
+    };
+    const postLineTest = async (requestUrl: string) => {
       const response = await fetch(requestUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          triggerId,
-          send: Boolean(options.send),
-          forceMode: options.forceMode,
-          variables: {
-            advId: selectedRealAdvId,
-            reportDate: new Date().toISOString().slice(0, 10),
-          },
-        }),
+        body: JSON.stringify(requestBody),
       });
-      const responseText = await response.text();
-      let payload: any = {};
-      try {
-        payload = responseText ? JSON.parse(responseText) : {};
-      } catch {
-        payload = { status: "invalid_json", raw: responseText.slice(0, 1000) };
+      return { requestUrl, response, payload: await parseLineTestResponse(response) };
+    };
+    try {
+      const apiBaseUrl = (lineUrlConfig.appBaseUrl || window.location.origin).replace(/\/$/, "");
+      const requestUrls = [
+        `${apiBaseUrl}/api/line/test-notification`,
+        "/api/line/test-notification",
+      ].filter((url, index, list) => list.indexOf(url) === index);
+
+      const attempts: any[] = [];
+      for (const requestUrl of requestUrls) {
+        try {
+          const { response, payload } = await postLineTest(requestUrl);
+          setLineLastResponse({ requestUrl, attempts, httpStatus: response.status, ...payload });
+          return;
+        } catch (err: any) {
+          attempts.push({ requestUrl, status: "fetch_failed", error: err?.message || String(err) });
+        }
       }
-      setLineLastResponse({ requestUrl, httpStatus: response.status, ...payload });
+      setLineLastResponse({
+        status: "error",
+        error: "Failed to fetch",
+        message: "ไม่สามารถเรียก API ทดสอบ LINE ได้ ตรวจสอบว่า App Base URL เปิดจากโดเมนเดียวกับ backend หรือ deploy Cloud Run เวอร์ชันล่าสุดที่รองรับ CORS แล้ว",
+        attempts,
+      });
     } catch (err: any) {
       setLineLastResponse({ status: "error", error: err?.message || String(err) });
     }
