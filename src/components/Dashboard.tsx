@@ -233,9 +233,19 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
     return new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" }).format(val);
   };
 
+  const currentEmployeeIds = [
+    currentEmployee.id,
+    currentEmployee.employeeId,
+    currentEmployee.uid,
+  ].filter(Boolean).map(String);
+  const ownAdvances = advances.filter((advance) => {
+    const advanceEmployeeId = String(advance.employeeId || "");
+    return currentEmployeeIds.includes(advanceEmployeeId) || (!advanceEmployeeId && advance.employeeName === currentEmployee.name);
+  });
+
   // 1. Employee calculations
-  const nonDraftAdvances = advances.filter((a) => a.status !== AdvanceStatus.DRAFT);
-  const draftAdvances = advances.filter((a) => a.status === AdvanceStatus.DRAFT);
+  const nonDraftAdvances = ownAdvances.filter((a) => a.status !== AdvanceStatus.DRAFT);
+  const draftAdvances = ownAdvances.filter((a) => a.status === AdvanceStatus.DRAFT);
 
   const empOutstandingBalance = nonDraftAdvances
     .filter((a) => [AdvanceStatus.WAITING_CLEARANCE, AdvanceStatus.PARTIALLY_CLEARED, AdvanceStatus.RETURNED].includes(a.status))
@@ -453,7 +463,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
     let weekCount = 0, weekAmount = 0, prevWeekAmount = 0;
     let monthCount = 0, monthAmount = 0, prevMonthAmount = 0;
 
-    const userAdvances = advances.filter(adv => adv.employeeId === currentEmployee.id);
+    const userAdvances = ownAdvances;
     userAdvances.forEach(adv => {
       const advDate = new Date(adv.createdAt);
       const amt = adv.requestAmount || 0;
@@ -505,6 +515,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
     return History;
   };
 
+  const myOpenItems = ownAdvances.filter((a) => ![AdvanceStatus.DRAFT, AdvanceStatus.CLOSED, AdvanceStatus.REJECTED].includes(a.status));
   const openItems = advances.filter((a) => ![AdvanceStatus.DRAFT, AdvanceStatus.CLOSED, AdvanceStatus.REJECTED].includes(a.status));
   const allOutstandingAmount = advances.reduce((sum, a) => sum + (a.outstandingAmount || 0), 0);
   const waitingTransferCount = advances.filter((a) => a.status === AdvanceStatus.WAITING_TRANSFER).length;
@@ -557,7 +568,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
   ].filter((action, index, list) => list.findIndex((item) => item.targetTab === action.targetTab) === index).slice(0, 4);
 
   const kpiCatalog = {
-    myOpenItems: { label: "งานค้างของฉัน", value: String(openItems.length), icon: Clock, tone: "amber" },
+    myOpenItems: { label: "งานค้างของฉัน", value: String(myOpenItems.length), icon: Clock, tone: "amber" },
     myOutstandingAmount: { label: "ยอดคงค้างของฉัน", value: formatCurrency(empOutstandingBalance), icon: Wallet, tone: "indigo" },
     myMonthlyItems: { label: "รายการเดือนนี้", value: `${currentMonthItems} รายการ`, icon: Calendar, tone: "emerald" },
     myDraftItems: { label: "แบบร่าง", value: `${draftAdvances.length} รายการ`, icon: FileText, tone: "stone" },
@@ -580,13 +591,19 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
   type KpiKey = keyof typeof kpiCatalog;
   const fallbackKpisByPosition: Record<string, KpiKey[]> = {
     employee: ["myOpenItems", "myOutstandingAmount", "myMonthlyItems", "myDraftItems", "myMoneyToClear", "myClosedAmount"],
+    foreman: ["myOpenItems", "myOutstandingAmount", "myMonthlyItems", "myDraftItems", "myMoneyToClear", "myClosedAmount"],
     manager: ["pendingApprovalCount", "pendingApprovalAmount", "recentRequestCount", "totalEmployeeCount", "allOpenItems", "allOutstandingAmount"],
-    pm: ["pendingApprovalCount", "pendingApprovalAmount", "recentRequestCount", "allOpenItems", "allOutstandingAmount", "totalAdvanceItems"],
+    pm: ["myOpenItems", "myOutstandingAmount", "myMonthlyItems", "myDraftItems", "myMoneyToClear", "myClosedAmount"],
     accountant: ["pendingClearanceAmount", "closedAmount", "totalAdvanceItems", "totalAdvanceAmount", "waitingTransferCount", "returnedCount"],
     accounting: ["pendingClearanceAmount", "closedAmount", "totalAdvanceItems", "totalAdvanceAmount", "waitingTransferCount", "returnedCount"],
     admin: ["pendingApprovalCount", "pendingClearanceAmount", "totalAdvanceAmount", "closedAmount", "totalEmployeeCount", "allOpenItems"],
   };
-  const configuredKpiKeys = (activeRoleConfig.dashboard?.kpis || []).filter((key): key is KpiKey => key in kpiCatalog);
+  const personalKpiOnlyPositions = new Set(["employee", "foreman", "pm"]);
+  const usesPersonalDashboardMetrics = personalKpiOnlyPositions.has(positionId);
+  const personalKpiKeys = new Set<KpiKey>(fallbackKpisByPosition.employee);
+  const configuredKpiKeys = (activeRoleConfig.dashboard?.kpis || [])
+    .filter((key): key is KpiKey => key in kpiCatalog)
+    .filter((key) => !usesPersonalDashboardMetrics || personalKpiKeys.has(key));
   const positionKpiKeys = [
     ...configuredKpiKeys,
     ...(fallbackKpisByPosition[positionId] || fallbackKpisByPosition.employee),
@@ -1353,7 +1370,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
       {/* ==================================================================== */}
       {/* 2. MANAGER / APPROVER DASHBOARD VIEW */}
       {/* ==================================================================== */}
-      {(isExecutivePosition || isAdminPosition) && (
+      {(isExecutivePosition || isAdminPosition) && !usesPersonalDashboardMetrics && (
         <div className="space-y-6">
           {/* Manager KPI Dashboard */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
