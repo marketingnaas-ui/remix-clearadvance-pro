@@ -600,6 +600,9 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
   };
   const personalKpiOnlyPositions = new Set(["employee", "foreman", "pm"]);
   const usesPersonalDashboardMetrics = personalKpiOnlyPositions.has(positionId);
+  const showRequesterDashboardSection = isRequesterPosition && !isAdminPosition && !isExecutivePosition && !isAccountingPosition;
+  const showExecutiveDashboardSection = (isExecutivePosition || isAdminPosition) && !usesPersonalDashboardMetrics && !isAdminPosition;
+  const showAccountingDashboardSection = (isAccountingPosition || isAdminPosition) && !isAdminPosition;
   const personalKpiKeys = new Set<KpiKey>(fallbackKpisByPosition.employee);
   const configuredKpiKeys = (activeRoleConfig.dashboard?.kpis || [])
     .filter((key): key is KpiKey => key in kpiCatalog)
@@ -1112,7 +1115,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
       {/* ==================================================================== */}
       {/* 1. EMPLOYEE DASHBOARD VIEW */}
       {/* ==================================================================== */}
-      {isRequesterPosition && (
+      {showRequesterDashboardSection && (
         <div className="space-y-6">
           {/* Top Menu Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
@@ -1228,7 +1231,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
           </div>
 
           {/* Drafts Section for Employee */}
-          {isRequesterPosition && (draftAdvances.length > 0 || draftClearingLogs.length > 0) && (
+          {showRequesterDashboardSection && (draftAdvances.length > 0 || draftClearingLogs.length > 0) && (
             <div className="bg-amber-50/50 border border-amber-200 rounded-2xl p-5 md:p-6 shadow-xs space-y-4 animate-fade-in" id="drafts_section">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -1370,7 +1373,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
       {/* ==================================================================== */}
       {/* 2. MANAGER / APPROVER DASHBOARD VIEW */}
       {/* ==================================================================== */}
-      {(isExecutivePosition || isAdminPosition) && !usesPersonalDashboardMetrics && (
+      {showExecutiveDashboardSection && (
         <div className="space-y-6">
           {/* Manager KPI Dashboard */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
@@ -1644,7 +1647,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
       {/* ==================================================================== */}
       {/* 3. ACCOUNTING DASHBOARD VIEW */}
       {/* ==================================================================== */}
-      {(isAccountingPosition || isAdminPosition) && (
+      {showAccountingDashboardSection && (
         <div className="space-y-6">
           {/* KPI Boxes */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
