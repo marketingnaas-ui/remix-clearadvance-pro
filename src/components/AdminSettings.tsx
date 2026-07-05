@@ -1173,7 +1173,9 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
     const triggerId = options.triggerId || previewTriggerId || "dailyExecutiveReport";
     setLineLastResponse({ status: "testing", triggerId, forceMode: options.forceMode || "trigger" });
     try {
-      const response = await fetch("/api/line/test-notification", {
+      const apiBaseUrl = (lineUrlConfig.appBaseUrl || window.location.origin).replace(/\/$/, "");
+      const requestUrl = `${apiBaseUrl}/api/line/test-notification`;
+      const response = await fetch(requestUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1186,8 +1188,14 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
           },
         }),
       });
-      const payload = await response.json().catch(() => ({ status: "invalid_json" }));
-      setLineLastResponse({ httpStatus: response.status, ...payload });
+      const responseText = await response.text();
+      let payload: any = {};
+      try {
+        payload = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        payload = { status: "invalid_json", raw: responseText.slice(0, 1000) };
+      }
+      setLineLastResponse({ requestUrl, httpStatus: response.status, ...payload });
     } catch (err: any) {
       setLineLastResponse({ status: "error", error: err?.message || String(err) });
     }
