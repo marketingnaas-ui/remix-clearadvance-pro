@@ -89,6 +89,10 @@ const PROFILES_DIR = path.join(process.cwd(), "profiles");
 if (!fs.existsSync(PROFILES_DIR)) {
   fs.mkdirSync(PROFILES_DIR, { recursive: true });
 }
+const SLIPS_DIR = path.join(process.cwd(), "slips");
+if (!fs.existsSync(SLIPS_DIR)) {
+  fs.mkdirSync(SLIPS_DIR, { recursive: true });
+}
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -790,6 +794,30 @@ async function startServer() {
     }
   });
 
+  app.get("/api/slips/:advId/:filename", (req, res) => {
+    try {
+      const { advId, filename } = req.params;
+      const filePath = path.resolve(SLIPS_DIR, advId, filename);
+      if (!filePath.startsWith(SLIPS_DIR)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).send("Slip image not found");
+      }
+      const ext = path.extname(filename).toLowerCase();
+      let contentType = "image/jpeg";
+      if (ext === ".png") contentType = "image/png";
+      else if (ext === ".webp") contentType = "image/webp";
+      else if (ext === ".gif") contentType = "image/gif";
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "private, max-age=604800");
+      return res.sendFile(filePath);
+    } catch (err: any) {
+      console.error("Error serving slip image:", err);
+      return res.status(500).send("Internal server error");
+    }
+  });
+
   app.get("/api/profile-image/:employeeId", async (req, res) => {
     try {
       if (!firestoreDb) return res.status(503).send("Firestore is not configured");
@@ -1448,7 +1476,7 @@ async function startServer() {
 
   app.post("/api/line/upload-slip", upload.single("slip"), async (req, res) => {
     try {
-      if (!firestoreDb || !bucket) return res.status(500).json({ error: "Firebase Admin storage is not initialized on the server." });
+      if (!firestoreDb) return res.status(500).json({ error: "Firebase Admin Firestore is not initialized on the server." });
       const advId = req.body?.advId;
       if (!advId || !req.file) return res.status(400).json({ error: "Missing advId or slip file." });
 
@@ -1459,24 +1487,40 @@ async function startServer() {
       const extension = path.extname(req.file.originalname || "") || ".jpg";
       const safeAdvId = String(advId).replace(/[^a-zA-Z0-9_-]/g, "_");
       const filePath = `slips/${safeAdvId}/slip_${Date.now()}${extension}`;
-      const remoteFile = bucket.file(filePath);
-      await remoteFile.save(req.file.buffer, {
-        contentType: req.file.mimetype || "image/jpeg",
-        metadata: { cacheControl: "public, max-age=31536000" },
-      });
-
+      let storageMode = "server-local";
       let downloadUrl = "";
-      try {
-        const [signedUrl] = await remoteFile.getSignedUrl({ action: "read", expires: "2500-01-01" });
-        downloadUrl = signedUrl;
-      } catch {
-        downloadUrl = `https://storage.googleapis.com/${bucket.name}/${encodeURIComponent(filePath)}`;
+      if (bucket) {
+        try {
+          const remoteFile = bucket.file(filePath);
+          await remoteFile.save(req.file.buffer, {
+            contentType: req.file.mimetype || "image/jpeg",
+            metadata: { cacheControl: "public, max-age=31536000" },
+          });
+          try {
+            const [signedUrl] = await remoteFile.getSignedUrl({ action: "read", expires: "2500-01-01" });
+            downloadUrl = signedUrl;
+          } catch {
+            downloadUrl = `https://storage.googleapis.com/${bucket.name}/${filePath.split("/").map(encodeURIComponent).join("/")}`;
+          }
+          storageMode = "firebase-admin-storage";
+        } catch (storageErr: any) {
+          console.warn("Firebase Admin storage upload failed, falling back to local slip storage:", storageErr?.message || storageErr);
+        }
+      }
+
+      if (!downloadUrl) {
+        const localDir = path.join(SLIPS_DIR, safeAdvId);
+        fs.mkdirSync(localDir, { recursive: true });
+        const filename = path.basename(filePath);
+        fs.writeFileSync(path.join(localDir, filename), req.file.buffer);
+        downloadUrl = `${getPublicBaseUrl()}/api/slips/${encodeURIComponent(safeAdvId)}/${encodeURIComponent(filename)}`;
       }
 
       await firestoreDb.collection("advances").doc(advance.id).set({
         status: "WAITING_CLEARANCE",
         slipUrl: downloadUrl,
         transferSlipUrl: downloadUrl,
+        transferSlipStorageMode: storageMode,
         transferCompletedAt: FieldValue.serverTimestamp(),
         transferUpdatedFrom: "line_liff",
       }, { merge: true });
@@ -1494,7 +1538,7 @@ async function startServer() {
         note: "แนบสลิปผ่าน LINE LIFF",
       }, { merge: true });
 
-      return res.json({ status: "success", url: downloadUrl });
+      return res.json({ status: "success", url: downloadUrl, storageMode });
     } catch (err: any) {
       console.error("LINE LIFF slip upload error:", err);
       return res.status(500).json({ error: err.message || "Cannot upload slip from LIFF." });
