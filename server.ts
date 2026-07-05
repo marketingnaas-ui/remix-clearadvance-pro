@@ -7,6 +7,16 @@ import { getApps, initializeApp, applicationDefault } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import multer from "multer";
+import crypto from "crypto";
+import {
+  canApproveAdvance,
+  canRejectAdvance,
+  getEmployeeEffectiveRole,
+  mergeRolePermissions,
+  normalizeApprovalWorkflow,
+  resolveEmployeeLineUserId,
+  resolvePositionId,
+} from "./src/lib/permissionEngine";
 
 dotenv.config();
 
@@ -147,6 +157,195 @@ const getDocByIdOrField = async (collectionName: string, idOrValue?: string, fie
   return { id: docSnap.id, ...docSnap.data() };
 };
 
+const LIFF_ADVANCE_SEARCH_FIELDS = ["docId", "advId", "advanceNo", "documentNo", "id", "requestNo"];
+
+const liffNotFoundPayload = (documentId?: string) => ({
+  status: "ไม่พบ",
+  error: "ไม่พบข้อมูลใบนี้",
+  searchedDocumentId: documentId || "",
+  searchedFields: LIFF_ADVANCE_SEARCH_FIELDS,
+});
+
+const findAdvanceForLiff = async (documentId?: string) => {
+  const value = String(documentId || "").trim();
+  if (!firestoreDb || !value) return null;
+
+  const byDocId = await firestoreDb.collection("advances").doc(value).get();
+  if (byDocId.exists) return { id: byDocId.id, ...byDocId.data(), _matchedField: "docId" };
+
+  for (const field of LIFF_ADVANCE_SEARCH_FIELDS.filter((item) => item !== "docId")) {
+    const snap = await firestoreDb.collection("advances").where(field, "==", value).limit(1).get();
+    if (!snap.empty) {
+      const docSnap = snap.docs[0];
+      return { id: docSnap.id, ...docSnap.data(), _matchedField: field };
+    }
+  }
+
+  return null;
+};
+
+const getGlobalSettings = async () => {
+  const snap = await firestoreDb.collection("settings").doc("global").get();
+  return snap.exists ? { id: snap.id, ...snap.data() } : {};
+};
+
+const findEmployeeByLineUserId = async (lineUserId?: string) => {
+  if (!firestoreDb || !lineUserId) return null;
+  const snap = await firestoreDb.collection("employees").where("lineUserId", "==", lineUserId).limit(1).get();
+  if (snap.empty) return null;
+  const docSnap = snap.docs[0];
+  return { id: docSnap.id, ...docSnap.data() };
+};
+
+const isEmployeeEnabled = (employee: any) =>
+  Boolean(employee) && employee.isActive !== false && !["Disabled", "Suspended", "DISABLED", "SUSPENDED"].includes(String(employee.status || ""));
+
+const isPendingApprovalStatus = (status?: any) => String(status || "").toUpperCase() === "PENDING_APPROVAL";
+
+const advanceAmount = (advance: any) => Number(advance?.requestAmount || advance?.amount || advance?.totalAmount || advance?.advanceAmount || 0);
+
+const lineIdOf = (employee: any) => resolveEmployeeLineUserId(employee) || "";
+
+const writeLineActionLog = async (payload: any) => {
+  const id = payload.id || `line-action-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  await firestoreDb.collection("lineActionLogs").doc(id).set({
+    id,
+    ...payload,
+    createdAt: payload.createdAt || new Date().toISOString(),
+  }, { merge: true });
+  return id;
+};
+
+const writeLineNotificationLog = async (payload: any) => {
+  const id = payload.id || `line-notification-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  await firestoreDb.collection("lineNotificationLogs").doc(id).set({
+    id,
+    ...payload,
+    createdAt: payload.createdAt || new Date().toISOString(),
+  }, { merge: true });
+  return id;
+};
+
+const mirrorCollections = [
+  "employees",
+  "projects",
+  "project_costs",
+  "advances",
+  "clearingLogs",
+  "clearingItems",
+  "vaultFiles",
+  "auditLogs",
+  "lineActionLogs",
+  "document_tracking",
+  "settings",
+  "aiUsageLogs",
+];
+
+const loadCollectionRows = async (collectionName: string) => {
+  const snap = await firestoreDb.collection(collectionName).get();
+  return snap.docs.map((docSnap: any) => ({ id: docSnap.id, ...docSnap.data() }));
+};
+
+const writeMirrorSyncLog = async (payload: any) => {
+  const id = payload.id || `mirror-sync-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  await firestoreDb.collection("mirrorSyncLogs").doc(id).set({
+    id,
+    status: payload.status || "FAILED",
+    createdAt: payload.createdAt || new Date().toISOString(),
+    ...payload,
+  }, { merge: true });
+  return id;
+};
+
+const callAppsScript = async (action: string, payload: any = {}) => {
+  const settings = await getGlobalSettings();
+  const googleWorkspace = (settings as any).googleWorkspace || {};
+  if (!googleWorkspace.appsScriptWebAppUrl) {
+    throw new Error("settings/global.googleWorkspace.appsScriptWebAppUrl is not configured");
+  }
+  const response = await fetch(googleWorkspace.appsScriptWebAppUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      apiKey: googleWorkspace.appsScriptApiKey || "",
+      action,
+      spreadsheetId: googleWorkspace.spreadsheetId || "",
+      parentFolderId: googleWorkspace.parentFolderId || "",
+      rootFolderId: googleWorkspace.rootFolderId || "",
+      config: googleWorkspace,
+      payload,
+    }),
+  });
+  const text = await response.text();
+  const parsed = (() => {
+    try { return text ? JSON.parse(text) : {}; } catch { return { raw: text }; }
+  })();
+  if (!response.ok) {
+    const error: any = new Error(parsed?.error || text || `Apps Script ${action} failed`);
+    error.status = response.status;
+    error.responsePayload = parsed;
+    throw error;
+  }
+  return parsed;
+};
+
+const runMirrorAction = async (action: string, payload: any, logMeta: any = {}) => {
+  try {
+    const responsePayload = await callAppsScript(action, payload);
+    await writeMirrorSyncLog({ ...logMeta, action, status: "SUCCESS", requestPayload: payload, responsePayload });
+    return { ok: true, responsePayload };
+  } catch (err: any) {
+    const responsePayload = err?.responsePayload || { error: err?.message || String(err) };
+    await writeMirrorSyncLog({ ...logMeta, action, status: "FAILED", requestPayload: payload, responsePayload, errorMessage: err?.message || String(err) });
+    return { ok: false, status: err?.status || 500, responsePayload };
+  }
+};
+
+const buildPendingApprovalReport = async (date?: string) => {
+  const snap = await firestoreDb.collection("advances").get();
+  const advances: any[] = [];
+  snap.forEach((docSnap: any) => {
+    const data = { id: docSnap.id, ...docSnap.data() };
+    if (isPendingApprovalStatus((data as any).status)) advances.push(data);
+  });
+  const groups = new Map<string, any>();
+  for (const advance of advances) {
+    const key = advance.projectName || advance.project || advance.projectId || "ไม่ระบุโครงการ";
+    const current = groups.get(key) || { projectName: key, pendingCount: 0, projectTotalAmount: 0, advances: [] };
+    const amount = advanceAmount(advance);
+    current.pendingCount += 1;
+    current.projectTotalAmount += amount;
+    current.advances.push({
+      id: advance.id,
+      advId: advance.advId || advance.advanceNo || advance.documentNo || advance.id,
+      employeeId: advance.employeeId || advance.requesterId || "",
+      employeeName: advance.employeeName || advance.requesterName || "-",
+      projectId: advance.projectId || "",
+      projectName: key,
+      category: advance.category || advance.expenseCategory || "-",
+      amount,
+      requestAmount: amount,
+      submittedAt: advance.createdAt || advance.submittedAt || advance.requestedAt || "",
+      neededDate: advance.neededDate || advance.dueDate || "",
+      status: advance.status || "",
+      details: advance.details || advance.remark || advance.reason || advance.description || "",
+      attachmentUrl: advance.attachmentUrl || advance.fileUrl || "",
+      attachmentName: advance.attachmentName || advance.fileName || "",
+      approvalHistory: advance.approvalHistory || [],
+    });
+    groups.set(key, current);
+  }
+  const projectGroups = Array.from(groups.values()).sort((a, b) => b.projectTotalAmount - a.projectTotalAmount);
+  const totalPendingAmount = projectGroups.reduce((sum, group) => sum + group.projectTotalAmount, 0);
+  return {
+    date: date || new Date().toISOString().slice(0, 10),
+    pendingCount: advances.length,
+    totalPendingAmount,
+    projectGroups,
+    topProjectsSummary: projectGroups.slice(0, 5).map((group) => `${group.projectName}: ${group.pendingCount} / ${formatMoney(group.projectTotalAmount)}`).join("\n"),
+  };
+};
+
 const replaceVariables = (template: string, vars: Record<string, any>): string => {
   let result = template || "";
   for (const [key, val] of Object.entries(vars)) {
@@ -215,8 +414,87 @@ const getLineSettings = async () => {
   return settingsSnap.data()?.lineMessagingConfig || null;
 };
 
+const getLineGroupId = (lineConfig: any): string => {
+  return String(lineConfig?.groupId || lineConfig?.lineGroupId || "").trim();
+};
+
+const replyLineMessage = async (lineConfig: any, replyToken: string, messages: any[]) => {
+  return fetch("https://api.line.me/v2/bot/message/reply", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${lineConfig.channelAccessToken.trim()}`
+    },
+    body: JSON.stringify({ replyToken, messages })
+  });
+};
+
+const getLineProfile = async (lineConfig: any, source: any): Promise<any> => {
+  const userId = source?.userId;
+  if (!userId) return {};
+  const endpoints = source?.groupId
+    ? [`https://api.line.me/v2/bot/group/${encodeURIComponent(source.groupId)}/member/${encodeURIComponent(userId)}`]
+    : [];
+  endpoints.push(`https://api.line.me/v2/bot/profile/${encodeURIComponent(userId)}`);
+
+  for (const endpoint of endpoints) {
+    try {
+      const profileRes = await fetch(endpoint, {
+        headers: { Authorization: `Bearer ${lineConfig.channelAccessToken.trim()}` }
+      });
+      if (profileRes.ok) return profileRes.json();
+    } catch (err: any) {
+      console.warn("Cannot fetch LINE profile:", err?.message || err);
+    }
+  }
+  return {};
+};
+
+const createLineBindMessage = (employee: any, token: string) => {
+  const displayName = employee.name || employee.fullName || employee.username || employee.employeeCode || "พนักงาน";
+  const employeeCode = employee.employeeCode || employee.username || employee.id || "";
+  return {
+    type: "flex",
+    altText: `เชื่อมบัญชี LINE สำหรับ ${displayName}`,
+    contents: {
+      type: "bubble",
+      size: "mega",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          { type: "text", text: "เชื่อมบัญชี LINE", weight: "bold", size: "lg", color: "#111827" },
+          { type: "text", text: displayName, weight: "bold", size: "md", color: "#374151", wrap: true },
+          { type: "text", text: employeeCode ? `รหัส/ผู้ใช้: ${employeeCode}` : "กดปุ่มด้านล่างเพื่อผูก LINE กับบัญชีนี้", size: "sm", color: "#6B7280", wrap: true },
+          { type: "text", text: "ให้เจ้าของบัญชีนี้เท่านั้นเป็นคนกด ระบบจะบันทึก LINE User ID อัตโนมัติ", size: "xs", color: "#9CA3AF", wrap: true }
+        ]
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            color: "#111111",
+            action: {
+              type: "postback",
+              label: "ผูก LINE ของฉัน",
+              data: `bindLine=1&employeeId=${encodeURIComponent(employee.id)}&token=${encodeURIComponent(token)}`,
+              displayText: `ผูก LINE: ${displayName}`
+            }
+          }
+        ]
+      }
+    }
+  };
+};
+
 const buildLiffUrl = (lineConfig: any, advId?: string) => {
   const params = new URLSearchParams();
+  params.set("route", "upload-slip");
   if (advId) params.set("adv_id", advId);
   const suffix = params.toString() ? `?${params.toString()}` : "";
   if (lineConfig?.liffId) return `https://liff.line.me/${lineConfig.liffId}${suffix}`;
@@ -226,6 +504,7 @@ const buildLiffUrl = (lineConfig: any, advId?: string) => {
 
 const buildLiffActionUrl = (lineConfig: any, advId?: string, action?: string) => {
   const params = new URLSearchParams();
+  params.set("route", "action");
   if (action) params.set("action", action);
   if (advId) params.set("adv_id", advId);
   const suffix = params.toString() ? `?${params.toString()}` : "";
@@ -243,7 +522,7 @@ const getEmployeeBankInfo = (advance: any, employee: any) => {
 };
 
 const getAdvanceForLine = async (advId: string) => {
-  const advance: any = await getDocByIdOrField("advances", advId, "advId");
+  const advance: any = await findAdvanceForLiff(advId);
   if (!advance) return null;
   const employeeId = advance.employeeId || advance.requesterId || advance.userId;
   const employee: any = await getDocByIdOrField("employees", employeeId, "employeeId");
@@ -251,6 +530,10 @@ const getAdvanceForLine = async (advId: string) => {
   return {
     id: advance.id,
     advId: advance.advId || advance.advanceNo || advance.id,
+    advanceNo: advance.advanceNo || "",
+    documentNo: advance.documentNo || "",
+    requestNo: advance.requestNo || "",
+    matchedField: advance._matchedField || "",
     employeeId,
     employeeName: advance.employeeName || advance.requesterName || employee?.name || employee?.fullName || "-",
     projectId: advance.projectId || "",
@@ -268,8 +551,8 @@ const getAdvanceForLine = async (advId: string) => {
 
 const enrichLineVariables = async (inputVariables: Record<string, any>, lineConfig: any) => {
   const variables: Record<string, any> = { ...(inputVariables || {}) };
-  const advId = variables.advId || variables.advanceId || variables.id;
-  const advance: any = await getDocByIdOrField("advances", advId, "advId");
+  const advId = variables.advId || variables.advanceId || variables.id || variables.docId || variables.documentId || variables.advanceNo || variables.documentNo;
+  const advance: any = await findAdvanceForLiff(advId);
   if (advance) {
     variables.advId = variables.advId || advance.advId || advance.advanceNo || advance.id;
     variables.employeeId = variables.employeeId || advance.employeeId || advance.requesterId || advance.userId;
@@ -330,6 +613,8 @@ const enrichLineVariables = async (inputVariables: Record<string, any>, lineConf
   variables.liffSlipUrl = variables.liffSlipUrl || buildLiffUrl(lineConfig, variables.advId);
   variables.liffActionApproveUrl = variables.liffActionApproveUrl || buildLiffActionUrl(lineConfig, variables.advId, "approve");
   variables.liffActionRejectUrl = variables.liffActionRejectUrl || buildLiffActionUrl(lineConfig, variables.advId, "reject");
+  const reportDate = variables.reportDate || new Date().toISOString().slice(0, 10);
+  variables.dailyReportUrl = variables.dailyReportUrl || (lineConfig?.liffId ? `https://liff.line.me/${lineConfig.liffId}?route=daily-report&date=${encodeURIComponent(reportDate)}` : `${getPublicBaseUrl()}/?route=daily-report&date=${encodeURIComponent(reportDate)}`);
   variables.profileImageUrl = resolveProfileImageUrl(null, variables.profileImageUrl) || "https://placehold.co/320x320/png?text=Profile";
   variables.outstandingShort = variables.outstandingShort || shortMoney(outstandingTotal);
   variables.totalAdvanceShort = variables.totalAdvanceShort || shortMoney(totalAdvance);
@@ -355,33 +640,65 @@ const enrichLineVariables = async (inputVariables: Record<string, any>, lineConf
   return variables;
 };
 
-const selectLineRecipients = (allEmployees: any[], trigger: any, variables: Record<string, any>, targetEmployeeId?: string, lineConfig?: any) => {
-  const recipientIdsSet = new Set<string>();
+const resolveLineRecipients = async (allEmployees: any[], trigger: any, variables: Record<string, any>, targetEmployeeId?: string, lineConfig?: any) => {
+  const recipients = new Map<string, any>();
   const mode = trigger.recipientMode || "target";
+  const settings = await getGlobalSettings();
+  const permissionSettings = {
+    rolePermissions: mergeRolePermissions((settings as any).rolePermissions),
+    approvalWorkflow: normalizeApprovalWorkflow((settings as any).approvalWorkflow),
+  };
   const targetIds = new Set([targetEmployeeId, variables.targetEmployeeId, variables.employeeId, variables.requesterId].filter(Boolean).map(String));
-  const roles = new Set<string>(trigger.recipientRoles || []);
-  const accountingRoles = new Set(["Accountant", "Accounting", "Admin"]);
-  const approverRoles = roles.size ? roles : new Set(["Manager", "Admin"]);
+  const triggerRoleIds = new Set([...(trigger.recipientRoleIds || []), ...(trigger.recipientRoles || [])].filter(Boolean).map((item: any) => String(item).toLowerCase()));
+  const documentId = variables.advId || variables.advanceId || variables.id || variables.docId || variables.documentId || variables.advanceNo || variables.documentNo;
+  const advance: any = documentId ? await findAdvanceForLiff(documentId) : null;
 
-  allEmployees.forEach((emp) => {
-    if (!emp.lineUserId) return;
+  const addEmployee = (emp: any, reason: string) => {
+    const lineUserId = lineIdOf(emp);
+    if (!lineUserId || !isEmployeeEnabled(emp)) return;
+    recipients.set(`user:${lineUserId}`, {
+      targetType: "user",
+      targetId: lineUserId,
+      employeeId: emp.id,
+      employeeName: emp.name || emp.fullName || emp.username || "",
+      reason,
+    });
+  };
+
+  for (const emp of allEmployees) {
     const empIds = [emp.id, emp.employeeId, emp.uid, emp.userId].filter(Boolean).map(String);
     const isTarget = empIds.some((id) => targetIds.has(id));
-    if (mode === "all") recipientIdsSet.add(emp.lineUserId);
-    if (mode === "target" && isTarget) recipientIdsSet.add(emp.lineUserId);
-    if (mode === "requester" && isTarget) recipientIdsSet.add(emp.lineUserId);
-    if (mode === "accounting" && accountingRoles.has(emp.role)) recipientIdsSet.add(emp.lineUserId);
-    if (mode === "approvers" && approverRoles.has(emp.role)) recipientIdsSet.add(emp.lineUserId);
-  });
+    const role = getEmployeeEffectiveRole(emp, permissionSettings);
+    const roleId = String(role?.id || emp.roleId || emp.positionId || emp.role || "").toLowerCase();
 
-  if (lineConfig?.groupId && typeof lineConfig.groupId === "string" && lineConfig.groupId.trim()) {
-    recipientIdsSet.add(lineConfig.groupId.trim());
-  }
-  if (lineConfig?.lineGroupId && typeof lineConfig.lineGroupId === "string" && lineConfig.lineGroupId.trim()) {
-    recipientIdsSet.add(lineConfig.lineGroupId.trim());
+    if (mode === "all") addEmployee(emp, "all");
+    if ((mode === "target" || mode === "requester") && isTarget) addEmployee(emp, mode);
+    if (mode === "custom" && Array.isArray(trigger.sendToUsers) && trigger.sendToUsers.includes(lineIdOf(emp))) addEmployee(emp, "custom");
+    if (mode === "accounting" && (roleId === "accountant" || roleId === "admin" || role?.permissions.reviewClearance || role?.permissions.closeAdvance)) addEmployee(emp, "accounting");
+    if (mode === "approvers") {
+      const roleMatch = triggerRoleIds.size ? triggerRoleIds.has(roleId) || triggerRoleIds.has(String(emp.role || "").toLowerCase()) : Boolean(role?.permissions.approveAdvance);
+      const permissionMatch = advance && trigger.useApprovalWorkflowRules !== false
+        ? canApproveAdvance(emp, advance, permissionSettings, "WEB").allowed
+        : roleMatch;
+      if (permissionMatch) addEmployee(emp, "approver");
+    }
+    if (trigger.alsoSendToRequester && isTarget) addEmployee(emp, "alsoRequester");
   }
 
-  return Array.from(recipientIdsSet);
+  if (trigger.sendToGroup === true && lineConfig?.enableGroupNotification === true) {
+    const groupId = String(lineConfig.groupId || lineConfig.lineGroupId || "").trim();
+    if (groupId) {
+      recipients.set(`group:${groupId}`, {
+        targetType: "group",
+        targetId: groupId,
+        employeeId: "",
+        employeeName: lineConfig.groupName || "LINE Group",
+        reason: "group",
+      });
+    }
+  }
+
+  return Array.from(recipients.values());
 };
 
 async function startServer() {
@@ -569,6 +886,16 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
+  app.get("/api/debug/firebase-info", (req, res) => {
+    res.json({
+      backendProjectId: firebaseConfig.projectId || adminAppInstance?.options?.projectId || "",
+      backendStorageBucket: firebaseConfig.storageBucket || adminAppInstance?.options?.storageBucket || "",
+      firestoreDatabaseId: firebaseConfig.firestoreDatabaseId || "(default)",
+      hasFirestoreAdmin: Boolean(firestoreDb),
+      hasBucket: Boolean(bucket),
+    });
+  });
+
   // API Route for LINE Notifications using real LINE Messaging API
   app.post("/api/line/send-notification", async (req, res) => {
     try {
@@ -617,9 +944,20 @@ async function startServer() {
         allEmployees.push({ id: docSnap.id, ...docSnap.data() });
       });
 
-      const recipients = selectLineRecipients(allEmployees, trigger, resolvedVariables, targetEmployeeId, lineConfig);
-      if (recipients.length === 0) {
+      const selectedRecipients = await resolveLineRecipients(allEmployees, trigger, resolvedVariables, targetEmployeeId, lineConfig);
+      const recipients = selectedRecipients.map((recipient) => recipient.targetId);
+      if (selectedRecipients.length === 0) {
         console.log("No recipients found with a registered LINE User ID.");
+        await writeLineNotificationLog({
+          triggerId,
+          advId: resolvedVariables.advId || "",
+          targetType: "none",
+          targetId: "",
+          recipientCount: 0,
+          status: "skipped",
+          lineApiResults: [],
+          errorMessage: "No eligible LINE recipients.",
+        });
         return res.json({ status: "skipped", message: "No employees have a registered LINE User ID." });
       }
 
@@ -638,7 +976,7 @@ async function startServer() {
 
       // 4. Send messages to LINE Messaging API
       const results: any[] = [];
-      for (const userId of recipients) {
+      for (const recipient of selectedRecipients) {
         try {
           const lineRes = await fetch("https://api.line.me/v2/bot/message/push", {
             method: "POST",
@@ -647,24 +985,172 @@ async function startServer() {
               Authorization: `Bearer ${channelAccessToken.trim()}`
             },
             body: JSON.stringify({
-              to: userId,
+              to: recipient.targetId,
               messages: [messagePayload]
             })
           });
 
           const resText = await lineRes.text();
-          console.log(`LINE API response for ${userId}:`, lineRes.status, resText);
-          results.push({ userId, status: lineRes.status, response: resText });
+          console.log(`LINE API response for ${recipient.targetId}:`, lineRes.status, resText);
+          results.push({ targetType: recipient.targetType, targetId: recipient.targetId, status: lineRes.status, response: resText });
         } catch (fetchErr: any) {
-          console.error(`Fetch error sending to LINE user ${userId}:`, fetchErr);
-          results.push({ userId, status: "error", error: fetchErr.message });
+          console.error(`Fetch error sending to LINE recipient ${recipient.targetId}:`, fetchErr);
+          results.push({ targetType: recipient.targetType, targetId: recipient.targetId, status: "error", error: fetchErr.message });
         }
       }
 
-      return res.json({ status: "success", recipientsSent: recipients.length, variables: resolvedVariables, results });
+      await writeLineNotificationLog({
+        triggerId,
+        advId: resolvedVariables.advId || "",
+        targetType: selectedRecipients.some((recipient) => recipient.targetType === "group") ? "mixed" : "user",
+        targetId: selectedRecipients.map((recipient) => recipient.targetId).join(","),
+        recipientCount: selectedRecipients.length,
+        status: results.some((item) => Number(item.status) >= 400 || item.status === "error") ? "partial" : "success",
+        lineApiResults: results,
+        errorMessage: results.filter((item) => Number(item.status) >= 400 || item.status === "error").map((item) => item.error || item.response).join("\n"),
+      });
+
+      return res.json({ status: "success", recipientsSent: recipients.length, selectedRecipients, variables: resolvedVariables, results });
     } catch (err: any) {
       console.error("Send LINE Notification error:", err);
       return res.status(500).json({ error: err.message || "Internal server error during notification dispatch." });
+    }
+  });
+
+  app.post("/api/line/test-notification", async (req, res) => {
+    const errors: string[] = [];
+    const lineApiResults: any[] = [];
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const { triggerId = "onNewRequest", variables = {}, targetEmployeeId, send = false, forceMode } = req.body || {};
+      const lineConfig = await getLineSettings();
+      const triggers = lineConfig?.triggers || [];
+      const trigger = triggers.find((item: any) => item.id === triggerId);
+      const testTrigger = trigger ? { ...trigger } : null;
+      if (testTrigger && forceMode) testTrigger.recipientMode = forceMode;
+      if (testTrigger && forceMode === "group") {
+        testTrigger.sendToGroup = true;
+        testTrigger.recipientMode = "custom";
+      }
+      const empSnap = firestoreDb ? await firestoreDb.collection("employees").get() : null;
+      const allEmployees: any[] = [];
+      empSnap?.forEach((docSnap: any) => allEmployees.push({ id: docSnap.id, ...docSnap.data() }));
+      const resolvedVariables = await enrichLineVariables({ ...variables, targetEmployeeId }, lineConfig || {});
+      const selectedRecipients = testTrigger
+        ? await resolveLineRecipients(allEmployees, testTrigger, resolvedVariables, targetEmployeeId, {
+            ...lineConfig,
+            enableGroupNotification: forceMode === "group" ? true : lineConfig?.enableGroupNotification,
+          })
+        : [];
+      if (!lineConfig) errors.push("LINE config not found.");
+      if (!lineConfig?.channelAccessToken) errors.push("Channel access token not found.");
+      if (!trigger) errors.push(`Trigger not found: ${triggerId}`);
+      if (trigger && !trigger.isActive) errors.push(`Trigger inactive: ${triggerId}`);
+
+      if (send && lineConfig?.channelAccessToken && testTrigger && selectedRecipients.length) {
+        const messagePayload = createLineMessagePayload(testTrigger, resolvedVariables);
+        for (const recipient of selectedRecipients) {
+          try {
+            const lineRes = await fetch("https://api.line.me/v2/bot/message/push", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${lineConfig.channelAccessToken.trim()}`,
+              },
+              body: JSON.stringify({ to: recipient.targetId, messages: [messagePayload] }),
+            });
+            lineApiResults.push({ targetType: recipient.targetType, targetId: recipient.targetId, status: lineRes.status, response: await lineRes.text() });
+          } catch (err: any) {
+            lineApiResults.push({ targetType: recipient.targetType, targetId: recipient.targetId, status: "error", error: err?.message || String(err) });
+          }
+        }
+        await writeLineNotificationLog({
+          triggerId,
+          advId: resolvedVariables.advId || "",
+          targetType: selectedRecipients.some((recipient) => recipient.targetType === "group") ? "mixed" : "user",
+          targetId: selectedRecipients.map((recipient) => recipient.targetId).join(","),
+          recipientCount: selectedRecipients.length,
+          status: lineApiResults.some((item) => Number(item.status) >= 400 || item.status === "error") ? "partial" : "success",
+          lineApiResults,
+          errorMessage: lineApiResults.filter((item) => Number(item.status) >= 400 || item.status === "error").map((item) => item.error || item.response).join("\n"),
+        });
+      }
+
+      return res.json({
+        configFound: Boolean(lineConfig),
+        tokenFound: Boolean(lineConfig?.channelAccessToken),
+        triggerFound: Boolean(trigger),
+        triggerActive: Boolean(trigger?.isActive),
+        selectedRecipients,
+        groupId: String(lineConfig?.groupId || lineConfig?.lineGroupId || ""),
+        lineApiResults,
+        errors,
+      });
+    } catch (err: any) {
+      errors.push(err?.message || String(err));
+      return res.status(500).json({
+        configFound: false,
+        tokenFound: false,
+        triggerFound: false,
+        triggerActive: false,
+        selectedRecipients: [],
+        groupId: "",
+        lineApiResults,
+        errors,
+      });
+    }
+  });
+
+  app.post("/api/line/send-bind-invite", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const { employeeId } = req.body || {};
+      if (!employeeId) return res.status(400).json({ error: "Missing employeeId." });
+
+      const lineConfig = await getLineSettings();
+      if (!lineConfig?.channelAccessToken) {
+        return res.json({ status: "skipped", message: "LINE Messaging is not configured." });
+      }
+      const groupId = getLineGroupId(lineConfig);
+      if (!groupId) {
+        return res.json({ status: "skipped", message: "LINE groupId is not configured." });
+      }
+
+      const employeeSnap = await firestoreDb.collection("employees").doc(String(employeeId)).get();
+      if (!employeeSnap.exists) return res.status(404).json({ error: "Employee not found." });
+      const employee = { id: employeeSnap.id, ...employeeSnap.data() };
+      const token = crypto.randomBytes(18).toString("hex");
+
+      await firestoreDb.collection("employees").doc(employeeSnap.id).set({
+        lineBindToken: token,
+        lineBindTokenCreatedAt: FieldValue.serverTimestamp(),
+        lineBindInviteSentAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      const messagePayload = createLineBindMessage(employee, token);
+      const lineRes = await fetch("https://api.line.me/v2/bot/message/push", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${lineConfig.channelAccessToken.trim()}`
+        },
+        body: JSON.stringify({
+          to: groupId,
+          messages: [messagePayload]
+        })
+      });
+
+      const responseText = await lineRes.text();
+      return res.json({
+        status: lineRes.ok ? "success" : "error",
+        lineStatus: lineRes.status,
+        response: responseText,
+        employeeId: employeeSnap.id,
+        groupId,
+      });
+    } catch (err: any) {
+      console.error("Send LINE bind invite error:", err);
+      return res.status(500).json({ error: err.message || "Internal server error during LINE bind invite." });
     }
   });
 
@@ -673,6 +1159,7 @@ async function startServer() {
       if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
       const advId = req.params.advId;
       const advance = await getAdvanceForLine(advId);
+      if (!advance) return res.status(404).json(liffNotFoundPayload(advId));
       if (!advance) return res.status(404).json({ error: "ไม่พบข้อมูลใบเบิกนี้" });
       return res.json({ status: "success", advance });
     } catch (err: any) {
@@ -684,51 +1171,142 @@ async function startServer() {
   app.post("/api/line/liff-action", async (req, res) => {
     try {
       if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
-      const { advId, action, userId, displayName } = req.body || {};
+      const { advId, action, userId, lineUserId, displayName, rejectReason } = req.body || {};
+      const resolvedLineUserId = String(lineUserId || userId || "").trim();
       if (!advId || !["approve", "reject"].includes(action)) {
         return res.status(400).json({ error: "Missing advId or invalid action." });
       }
 
-      const advance: any = await getDocByIdOrField("advances", advId, "advId");
+      const advance: any = await findAdvanceForLiff(advId);
+      if (!advance?.id) return res.status(404).json(liffNotFoundPayload(advId));
       if (!advance?.id) return res.status(404).json({ error: "ไม่พบข้อมูลใบเบิกนี้" });
 
-      let approverName = displayName || "LINE LIFF";
-      if (userId) {
-        const approverSnap = await firestoreDb.collection("employees").where("lineUserId", "==", userId).limit(1).get();
-        if (!approverSnap.empty) {
-          const approver = approverSnap.docs[0].data();
-          approverName = approver.name || approver.fullName || approver.lineDisplayName || approverName;
-        }
+      const employee: any = await findEmployeeByLineUserId(resolvedLineUserId);
+      const employeeName = employee?.name || employee?.fullName || employee?.lineDisplayName || displayName || "LINE LIFF";
+      const matchedRoleId = employee ? resolvePositionId(employee) : "";
+
+      if (!employee) {
+        const denyReason = "บัญชี LINE นี้ยังไม่ได้เชื่อมกับผู้ใช้งานในระบบ";
+        await writeLineActionLog({
+          advId,
+          action,
+          status: advance.status || "",
+          lineUserId: resolvedLineUserId,
+          employeeId: "",
+          employeeName,
+          roleId: "",
+          positionId: "",
+          allowed: false,
+          denyReason,
+          source: "LINE_LIFF",
+          requestPayload: req.body,
+          responsePayload: { error: denyReason },
+        });
+        return res.status(403).json({ error: denyReason });
+      }
+
+      if (!isEmployeeEnabled(employee)) {
+        const denyReason = "employee inactive or disabled";
+        await writeLineActionLog({
+          advId,
+          action,
+          status: advance.status || "",
+          lineUserId: resolvedLineUserId,
+          employeeId: employee.id,
+          employeeName,
+          roleId: employee.roleId || matchedRoleId,
+          positionId: employee.positionId || matchedRoleId,
+          allowed: false,
+          denyReason,
+          source: "LINE_LIFF",
+          requestPayload: req.body,
+          responsePayload: { error: denyReason },
+        });
+        return res.status(403).json({ error: denyReason });
+      }
+
+      const settings: any = await getGlobalSettings();
+      const permissionSettings = {
+        rolePermissions: mergeRolePermissions(settings.rolePermissions),
+        approvalWorkflow: normalizeApprovalWorkflow(settings.approvalWorkflow),
+      };
+      const permissionResult = action === "approve"
+        ? canApproveAdvance(employee, advance, permissionSettings, "LINE_LIFF")
+        : canRejectAdvance(employee, advance, permissionSettings, "LINE_LIFF");
+      const logBase = {
+        advId,
+        action,
+        status: advance.status || "",
+        lineUserId: resolvedLineUserId || resolveEmployeeLineUserId(employee) || "",
+        employeeId: employee.id,
+        employeeName,
+        roleId: employee.roleId || permissionResult.matchedRole?.id || matchedRoleId,
+        positionId: employee.positionId || permissionResult.matchedRole?.id || matchedRoleId,
+        matchedApprovalRuleId: permissionResult.matchedRule?.id || "",
+        matchedApprovalRuleName: permissionResult.matchedRule?.name || "",
+        source: "LINE_LIFF",
+        requestPayload: req.body,
+      };
+
+      if (!permissionResult.allowed) {
+        await writeLineActionLog({
+          ...logBase,
+          allowed: false,
+          denyReason: permissionResult.reason,
+          responsePayload: { error: permissionResult.reason },
+        });
+        return res.status(403).json({ error: permissionResult.reason, permission: permissionResult });
       }
 
       const nowIso = new Date().toISOString();
+      const roleId = employee.roleId || permissionResult.matchedRole?.id || matchedRoleId;
+      const positionId = employee.positionId || permissionResult.matchedRole?.id || matchedRoleId;
       const updatePayload = action === "approve"
         ? {
             status: "WAITING_TRANSFER",
             approvedAt: nowIso,
-            approvedBy: approverName,
+            approvedBy: employeeName,
+            approvedByEmployeeId: employee.id,
+            approvedByRoleId: roleId,
+            approvedByPositionId: positionId,
             lineActionAt: FieldValue.serverTimestamp(),
-            lineActionBy: userId || approverName,
-            lineActionSource: "liff",
+            lineActionBy: resolvedLineUserId || employeeName,
+            lineActionByLineUserId: resolvedLineUserId || resolveEmployeeLineUserId(employee) || "",
+            lineActionSource: "LINE_LIFF",
+            matchedApprovalRuleId: permissionResult.matchedRule?.id || "",
+            matchedApprovalRuleName: permissionResult.matchedRule?.name || "",
           }
         : {
             status: "REJECTED",
             rejectedAt: nowIso,
-            rejectedBy: approverName,
+            rejectedBy: employeeName,
+            rejectedByEmployeeId: employee.id,
+            rejectedByRoleId: roleId,
+            rejectedByPositionId: positionId,
+            rejectReason: rejectReason || "Rejected from LINE LIFF",
             lineActionAt: FieldValue.serverTimestamp(),
-            lineActionBy: userId || approverName,
-            lineActionSource: "liff",
+            lineActionBy: resolvedLineUserId || employeeName,
+            lineActionByLineUserId: resolvedLineUserId || resolveEmployeeLineUserId(employee) || "",
+            lineActionSource: "LINE_LIFF",
+            matchedApprovalRuleId: permissionResult.matchedRule?.id || "",
+            matchedApprovalRuleName: permissionResult.matchedRule?.name || "",
           };
 
       await firestoreDb.collection("advances").doc(advance.id).set(updatePayload, { merge: true });
+      await writeLineActionLog({
+        ...logBase,
+        allowed: true,
+        denyReason: "",
+        responsePayload: { status: "success", updatePayload },
+      });
 
       const auditId = `audit-line-${Date.now()}-${advance.id}`;
       await firestoreDb.collection("auditLogs").doc(auditId).set({
         id: auditId,
         advId: advance.advId || advId,
         actionType: action === "approve" ? "APPROVE_ADVANCE" : "REJECT_ADVANCE",
-        actionBy: approverName,
-        role: "LINE",
+        actionBy: employeeName,
+        role: employee.role || roleId || "LINE",
         timestamp: nowIso,
         beforeStatus: advance.status || "",
         afterStatus: updatePayload.status,
@@ -736,10 +1314,135 @@ async function startServer() {
       }, { merge: true });
 
       const updatedAdvance = await getAdvanceForLine(advId);
-      return res.json({ status: "success", action, advance: updatedAdvance });
+      return res.json({ status: "success", action, advance: updatedAdvance, permission: permissionResult });
     } catch (err: any) {
       console.error("LINE LIFF action error:", err);
       return res.status(500).json({ error: err.message || "Cannot update advance from LIFF." });
+    }
+  });
+
+  app.post("/api/line/liff-batch-action", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const { action, advIds = [], lineUserId, reason = "", source = "LINE_LIFF_DAILY_REPORT" } = req.body || {};
+      if (!["approve", "reject"].includes(action) || !Array.isArray(advIds) || advIds.length === 0) {
+        return res.status(400).json({ error: "Missing action or advIds." });
+      }
+
+      const employee: any = await findEmployeeByLineUserId(String(lineUserId || "").trim());
+      if (!employee) return res.status(403).json({ error: "บัญชี LINE นี้ยังไม่ได้เชื่อมกับผู้ใช้งานในระบบ" });
+      if (!isEmployeeEnabled(employee)) return res.status(403).json({ error: "employee inactive or disabled" });
+
+      const settings: any = await getGlobalSettings();
+      const permissionSettings = {
+        rolePermissions: mergeRolePermissions(settings.rolePermissions),
+        approvalWorkflow: normalizeApprovalWorkflow(settings.approvalWorkflow),
+      };
+      const employeeName = employee.name || employee.fullName || employee.lineDisplayName || "LINE LIFF";
+      const results: any[] = [];
+      const summary = { requested: advIds.length, approved: 0, denied: 0, failed: 0, totalApprovedAmount: 0 };
+
+      for (const rawAdvId of advIds) {
+        const advId = String(rawAdvId || "").trim();
+        try {
+          const advance: any = await findAdvanceForLiff(advId);
+          if (!advance?.id) {
+            summary.failed += 1;
+            results.push({ advId, status: "failed", reason: "advance not found", matchedRuleId: "", matchedRuleName: "" });
+            await writeLineActionLog({ advId, action, status: "NOT_FOUND", lineUserId, employeeId: employee.id, employeeName, roleId: employee.roleId || "", positionId: employee.positionId || "", allowed: false, denyReason: "advance not found", source, requestPayload: req.body, responsePayload: { error: "advance not found" } });
+            continue;
+          }
+
+          if (!isPendingApprovalStatus(advance.status)) {
+            summary.denied += 1;
+            results.push({ advId, status: "denied", reason: "advance is not PENDING_APPROVAL", matchedRuleId: "", matchedRuleName: "" });
+            await writeLineActionLog({ advId, action, status: advance.status || "", lineUserId, employeeId: employee.id, employeeName, roleId: employee.roleId || "", positionId: employee.positionId || "", allowed: false, denyReason: "advance is not PENDING_APPROVAL", source, requestPayload: req.body, responsePayload: { error: "advance is not PENDING_APPROVAL" } });
+            continue;
+          }
+
+          const permissionResult = action === "approve"
+            ? canApproveAdvance(employee, advance, permissionSettings, "LINE_LIFF")
+            : canRejectAdvance(employee, advance, permissionSettings, "LINE_LIFF");
+          const batchAllowed = Boolean(permissionResult.matchedRole?.permissions.batchApproveAdvance && permissionResult.matchedRule?.allowBatchApproval);
+          const allowed = permissionResult.allowed && batchAllowed;
+          const denyReason = permissionResult.allowed && !batchAllowed ? "batch approval is disabled for this role/rule" : permissionResult.reason;
+          const matchedRoleId = employee.roleId || permissionResult.matchedRole?.id || resolvePositionId(employee);
+          const matchedPositionId = employee.positionId || permissionResult.matchedRole?.id || resolvePositionId(employee);
+
+          if (!allowed) {
+            summary.denied += 1;
+            results.push({ advId, status: "denied", reason: denyReason, matchedRuleId: permissionResult.matchedRule?.id || "", matchedRuleName: permissionResult.matchedRule?.name || "" });
+            await writeLineActionLog({ advId, action, status: advance.status || "", lineUserId, employeeId: employee.id, employeeName, roleId: matchedRoleId, positionId: matchedPositionId, matchedApprovalRuleId: permissionResult.matchedRule?.id || "", matchedApprovalRuleName: permissionResult.matchedRule?.name || "", allowed: false, denyReason, source, requestPayload: req.body, responsePayload: { error: denyReason } });
+            continue;
+          }
+
+          const nowIso = new Date().toISOString();
+          const updatePayload = action === "approve"
+            ? {
+                status: "WAITING_TRANSFER",
+                approvedAt: nowIso,
+                approvedBy: employeeName,
+                approvedByEmployeeId: employee.id,
+                approvedByRoleId: matchedRoleId,
+                approvedByPositionId: matchedPositionId,
+                lineActionByLineUserId: lineUserId || "",
+                lineActionSource: source,
+                matchedApprovalRuleId: permissionResult.matchedRule?.id || "",
+                matchedApprovalRuleName: permissionResult.matchedRule?.name || "",
+              }
+            : {
+                status: "REJECTED",
+                rejectedAt: nowIso,
+                rejectedBy: employeeName,
+                rejectedByEmployeeId: employee.id,
+                rejectedByRoleId: matchedRoleId,
+                rejectedByPositionId: matchedPositionId,
+                rejectReason: reason || "Rejected from LINE daily report",
+                lineActionByLineUserId: lineUserId || "",
+                lineActionSource: source,
+                matchedApprovalRuleId: permissionResult.matchedRule?.id || "",
+                matchedApprovalRuleName: permissionResult.matchedRule?.name || "",
+              };
+          await firestoreDb.collection("advances").doc(advance.id).set(updatePayload, { merge: true });
+          await firestoreDb.collection("auditLogs").doc(`audit-batch-${Date.now()}-${advance.id}`).set({
+            id: `audit-batch-${Date.now()}-${advance.id}`,
+            advId: advance.advId || advId,
+            actionType: action === "approve" ? "APPROVE_ADVANCE" : "REJECT_ADVANCE",
+            actionBy: employeeName,
+            role: employee.role || matchedRoleId,
+            timestamp: nowIso,
+            beforeStatus: advance.status || "",
+            afterStatus: updatePayload.status,
+            note: action === "approve" ? "Batch approved via LINE daily report" : "Batch rejected via LINE daily report",
+          }, { merge: true });
+          await writeLineActionLog({ advId, action, status: advance.status || "", lineUserId, employeeId: employee.id, employeeName, roleId: matchedRoleId, positionId: matchedPositionId, matchedApprovalRuleId: permissionResult.matchedRule?.id || "", matchedApprovalRuleName: permissionResult.matchedRule?.name || "", allowed: true, denyReason: "", source, requestPayload: req.body, responsePayload: { status: "success", updatePayload } });
+          summary.approved += 1;
+          summary.totalApprovedAmount += advanceAmount(advance);
+          results.push({ advId, status: "success", reason: "allowed", matchedRuleId: permissionResult.matchedRule?.id || "", matchedRuleName: permissionResult.matchedRule?.name || "" });
+        } catch (err: any) {
+          summary.failed += 1;
+          results.push({ advId, status: "failed", reason: err?.message || String(err), matchedRuleId: "", matchedRuleName: "" });
+          await writeLineActionLog({ advId, action, status: "FAILED", lineUserId, employeeId: employee.id, employeeName, roleId: employee.roleId || "", positionId: employee.positionId || "", allowed: false, denyReason: err?.message || String(err), source, requestPayload: req.body, responsePayload: { error: err?.message || String(err) } });
+        }
+      }
+
+      runMirrorAction("syncCollectionToGoogleSheet", { collectionName: "advances", rows: await loadCollectionRows("advances") }, { collectionName: "advances", source: "liff-batch-action" }).catch((err) => console.warn("Batch sheet sync failed:", err?.message || err));
+      const lineConfig = await getLineSettings();
+      if (lineConfig?.channelAccessToken && lineIdOf(employee)) {
+        fetch("https://api.line.me/v2/bot/message/push", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${lineConfig.channelAccessToken.trim()}` },
+          body: JSON.stringify({
+            to: lineIdOf(employee),
+            messages: [{ type: "text", text: `Batch ${action} summary: success ${summary.approved}, denied ${summary.denied}, failed ${summary.failed}, total ${formatMoney(summary.totalApprovedAmount)}` }],
+          }),
+        }).catch((err) => console.warn("Batch summary LINE push failed:", err?.message || err));
+      }
+
+      return res.json({ status: "success", summary, results });
+    } catch (err: any) {
+      console.error("LINE LIFF batch action error:", err);
+      return res.status(500).json({ error: err?.message || "Cannot run batch action." });
     }
   });
 
@@ -749,7 +1452,8 @@ async function startServer() {
       const advId = req.body?.advId;
       if (!advId || !req.file) return res.status(400).json({ error: "Missing advId or slip file." });
 
-      const advance: any = await getDocByIdOrField("advances", advId, "advId");
+      const advance: any = await findAdvanceForLiff(advId);
+      if (!advance?.id) return res.status(404).json(liffNotFoundPayload(advId));
       if (!advance?.id) return res.status(404).json({ error: "ไม่พบข้อมูลใบเบิกนี้" });
 
       const extension = path.extname(req.file.originalname || "") || ".jpg";
@@ -813,6 +1517,48 @@ async function startServer() {
         let triggerId = "";
         let variables: Record<string, any> = {};
 
+        if (data.get("bindLine")) {
+          const employeeId = data.get("employeeId") || "";
+          const token = data.get("token") || "";
+          const userId = event.source?.userId || "";
+          if (!employeeId || !token || !userId) {
+            await replyLineMessage(lineConfig, event.replyToken, [{ type: "text", text: "ผูก LINE ไม่สำเร็จ: ข้อมูลปุ่มไม่ครบ กรุณาให้แอดมินส่งปุ่มใหม่" }]);
+            replies.push({ action: "bindLine", status: "invalid_payload" });
+            continue;
+          }
+
+          const employeeRef = firestoreDb.collection("employees").doc(employeeId);
+          const employeeSnap = await employeeRef.get();
+          const employee = employeeSnap.exists ? employeeSnap.data() : null;
+          if (!employee || employee.lineBindToken !== token) {
+            await replyLineMessage(lineConfig, event.replyToken, [{ type: "text", text: "ผูก LINE ไม่สำเร็จ: ปุ่มนี้หมดอายุหรือไม่ตรงกับบัญชี กรุณาให้แอดมินส่งปุ่มใหม่" }]);
+            replies.push({ action: "bindLine", status: "token_mismatch", employeeId });
+            continue;
+          }
+
+          const existingSnap = await firestoreDb.collection("employees").where("lineUserId", "==", userId).limit(1).get();
+          if (!existingSnap.empty && existingSnap.docs[0].id !== employeeId) {
+            await replyLineMessage(lineConfig, event.replyToken, [{ type: "text", text: "LINE นี้ถูกผูกกับบัญชีอื่นแล้ว กรุณาติดต่อแอดมินเพื่อตรวจสอบ" }]);
+            replies.push({ action: "bindLine", status: "already_bound_other_employee", employeeId });
+            continue;
+          }
+
+          const profile = await getLineProfile(lineConfig, event.source);
+          await employeeRef.set({
+            lineUserId: userId,
+            lineDisplayName: profile.displayName || employee.lineDisplayName || "",
+            linePictureUrl: profile.pictureUrl || employee.linePictureUrl || "",
+            lineLinkedAt: FieldValue.serverTimestamp(),
+            lineLinkedFromGroupId: event.source?.groupId || "",
+            lineBindToken: FieldValue.delete(),
+          }, { merge: true });
+
+          const name = employee.name || employee.fullName || employee.username || "บัญชีนี้";
+          await replyLineMessage(lineConfig, event.replyToken, [{ type: "text", text: `เชื่อม LINE ให้ ${name} เรียบร้อยแล้ว` }]);
+          replies.push({ action: "bindLine", status: "success", employeeId, userId });
+          continue;
+        }
+
         if (data.get("report")) {
           const report = data.get("report");
           triggerId = report === "daily" ? "dailyReport" : report === "weekly" ? "weeklyReport" : "outstandingReport";
@@ -859,6 +1605,28 @@ async function startServer() {
     }
   });
 
+  app.get("/api/google-workspace/report/pending-approval", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const report = await buildPendingApprovalReport(String(req.query.date || ""));
+      return res.json({ status: "success", report });
+    } catch (err: any) {
+      console.error("Pending approval report error:", err);
+      return res.status(500).json({ error: err?.message || "Cannot load pending approval report." });
+    }
+  });
+
+  app.get("/api/google-workspace/report/daily", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const report = await buildPendingApprovalReport(String(req.query.date || ""));
+      return res.json({ status: "success", report });
+    } catch (err: any) {
+      console.error("Daily report error:", err);
+      return res.status(500).json({ error: err?.message || "Cannot load daily report." });
+    }
+  });
+
   app.post("/api/google-workspace/advance-sync", async (req, res) => {
     try {
       const { config, payload } = req.body || {};
@@ -893,6 +1661,142 @@ async function startServer() {
     } catch (err: any) {
       console.error("Google Workspace advance sync error:", err);
       return res.status(500).json({ error: err?.message || "Internal server error during Apps Script sync." });
+    }
+  });
+
+  app.post("/api/google-workspace/test-connection", async (req, res) => {
+    const result = await runMirrorAction("testConnection", req.body || {}, { collectionName: "settings" });
+    return res.status(result.ok ? 200 : result.status || 500).json(result.responsePayload);
+  });
+
+  app.post("/api/google-workspace/sync-collection", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const collectionName = String(req.body?.collectionName || "").trim();
+      if (!collectionName) return res.status(400).json({ error: "Missing collectionName" });
+      const rows = await loadCollectionRows(collectionName);
+      const result = await runMirrorAction("syncCollectionToGoogleSheet", {
+        collectionName,
+        mirrorType: mirrorCollections.includes(collectionName) ? "core" : "raw",
+        rows,
+      }, { collectionName });
+      return res.status(result.ok ? 200 : result.status || 500).json(result.responsePayload);
+    } catch (err: any) {
+      await writeMirrorSyncLog({ action: "syncCollectionToGoogleSheet", collectionName: req.body?.collectionName || "", status: "FAILED", errorMessage: err?.message || String(err), requestPayload: req.body });
+      return res.status(500).json({ error: err?.message || "Cannot sync collection." });
+    }
+  });
+
+  app.post("/api/google-workspace/sync-all", async (_req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const collections: Record<string, any[]> = {};
+      for (const collectionName of mirrorCollections) {
+        collections[collectionName] = await loadCollectionRows(collectionName);
+      }
+      const result = await runMirrorAction("syncFullFirestoreToGoogleSheet", { collections, collectionNames: mirrorCollections }, { collectionName: "*" });
+      return res.status(result.ok ? 200 : result.status || 500).json(result.responsePayload);
+    } catch (err: any) {
+      await writeMirrorSyncLog({ action: "syncFullFirestoreToGoogleSheet", collectionName: "*", status: "FAILED", errorMessage: err?.message || String(err) });
+      return res.status(500).json({ error: err?.message || "Cannot sync all collections." });
+    }
+  });
+
+  app.post("/api/google-workspace/sync-advance-bundle", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const advId = String(req.body?.advId || "").trim();
+      if (!advId) return res.status(400).json({ error: "Missing advId" });
+      const advance: any = await getDocByIdOrField("advances", advId, "advId");
+      if (!advance) return res.status(404).json({ error: "Advance not found." });
+      const vaultFilesSnap = await firestoreDb.collection("vaultFiles").where("advId", "==", advance.advId || advId).get();
+      const clearingLogsSnap = await firestoreDb.collection("clearingLogs").where("advId", "==", advance.advId || advId).get();
+      const payload = {
+        advId,
+        advance,
+        vaultFiles: vaultFilesSnap.docs.map((docSnap: any) => ({ id: docSnap.id, ...docSnap.data() })),
+        clearingLogs: clearingLogsSnap.docs.map((docSnap: any) => ({ id: docSnap.id, ...docSnap.data() })),
+      };
+      const result = await runMirrorAction("syncAdvanceBundleToGoogleWorkspace", payload, { collectionName: "advances", documentId: advance.id });
+      return res.status(result.ok ? 200 : result.status || 500).json(result.responsePayload);
+    } catch (err: any) {
+      await writeMirrorSyncLog({ action: "syncAdvanceBundleToGoogleWorkspace", collectionName: "advances", status: "FAILED", errorMessage: err?.message || String(err), requestPayload: req.body });
+      return res.status(500).json({ error: err?.message || "Cannot sync advance bundle." });
+    }
+  });
+
+  app.post("/api/google-workspace/sync-clearance-bundle", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const clrId = String(req.body?.clrId || req.body?.clearingLogId || "").trim();
+      if (!clrId) return res.status(400).json({ error: "Missing clrId" });
+      const clearance: any = await getDocByIdOrField("clearingLogs", clrId, "clearingNo");
+      if (!clearance) return res.status(404).json({ error: "Clearance not found." });
+      const itemsSnap = await firestoreDb.collection("clearingItems").where("clearingLogId", "==", clearance.id).get();
+      const payload = {
+        clrId,
+        clearance,
+        items: itemsSnap.docs.map((docSnap: any) => ({ id: docSnap.id, ...docSnap.data() })),
+      };
+      const result = await runMirrorAction("syncClearanceBundleToGoogleWorkspace", payload, { collectionName: "clearingLogs", documentId: clearance.id });
+      return res.status(result.ok ? 200 : result.status || 500).json(result.responsePayload);
+    } catch (err: any) {
+      await writeMirrorSyncLog({ action: "syncClearanceBundleToGoogleWorkspace", collectionName: "clearingLogs", status: "FAILED", errorMessage: err?.message || String(err), requestPayload: req.body });
+      return res.status(500).json({ error: err?.message || "Cannot sync clearance bundle." });
+    }
+  });
+
+  app.post("/api/google-workspace/save-files", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const result = await runMirrorAction("saveFiles", req.body || {}, { collectionName: "vaultFiles" });
+      const savedFiles = result.responsePayload?.files || result.responsePayload?.savedFiles || [];
+      if (result.ok && Array.isArray(savedFiles)) {
+        for (const file of savedFiles) {
+          const fileId = file.vaultFileId || file.id || file.fileId;
+          if (!fileId) continue;
+          await firestoreDb.collection("vaultFiles").doc(String(fileId)).set({
+            driveFileId: file.driveFileId || file.id || "",
+            driveUrl: file.driveUrl || file.driveFileUrl || file.webViewLink || "",
+            driveFileUrl: file.driveUrl || file.driveFileUrl || file.webViewLink || "",
+            syncStatus: "SUCCESS",
+            syncUpdatedAt: new Date().toISOString(),
+            sourceUrl: file.sourceUrl || file.fileUrl || "",
+            fileName: file.fileName || "",
+            fileType: file.fileType || "",
+            advId: file.advId || "",
+            clrId: file.clrId || "",
+            uploadedBy: file.uploadedBy || "",
+            uploadedAt: file.uploadedAt || new Date().toISOString(),
+            errorMessage: "",
+          }, { merge: true });
+        }
+      }
+      return res.status(result.ok ? 200 : result.status || 500).json(result.responsePayload);
+    } catch (err: any) {
+      await writeMirrorSyncLog({ action: "saveFiles", collectionName: "vaultFiles", status: "FAILED", errorMessage: err?.message || String(err), requestPayload: req.body });
+      return res.status(500).json({ error: err?.message || "Cannot save files to Google Drive." });
+    }
+  });
+
+  app.post("/api/google-workspace/refresh-reports", async (req, res) => {
+    const result = await runMirrorAction("refreshGoogleSheetReports", req.body || {}, { collectionName: "settings" });
+    return res.status(result.ok ? 200 : result.status || 500).json(result.responsePayload);
+  });
+
+  app.post("/api/google-workspace/retry-failed-sync", async (req, res) => {
+    try {
+      if (!firestoreDb) return res.status(500).json({ error: "Firestore DB is not initialized on the server." });
+      const logId = String(req.body?.logId || "").trim();
+      if (!logId) return res.status(400).json({ error: "Missing logId" });
+      const logSnap = await firestoreDb.collection("mirrorSyncLogs").doc(logId).get();
+      if (!logSnap.exists) return res.status(404).json({ error: "Sync log not found." });
+      const log = logSnap.data() || {};
+      const result = await runMirrorAction(log.action || "syncCollectionToGoogleSheet", log.requestPayload || {}, { retryOf: logId, collectionName: log.collectionName || "" });
+      return res.status(result.ok ? 200 : result.status || 500).json(result.responsePayload);
+    } catch (err: any) {
+      await writeMirrorSyncLog({ action: "retryFailedSync", status: "FAILED", errorMessage: err?.message || String(err), requestPayload: req.body });
+      return res.status(500).json({ error: err?.message || "Cannot retry failed sync." });
     }
   });
 

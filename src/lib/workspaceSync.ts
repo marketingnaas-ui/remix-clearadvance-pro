@@ -7,6 +7,7 @@ export interface GoogleWorkspaceSettings {
   spreadsheetId?: string;
   spreadsheetUrl?: string;
   parentFolderId?: string;
+  rootFolderId?: string;
   vaultFolderIds?: { [advId: string]: string };
   autoSyncSheets?: boolean;
   autoSyncDrive?: boolean;

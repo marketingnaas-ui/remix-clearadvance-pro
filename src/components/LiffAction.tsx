@@ -39,9 +39,20 @@ const copyToClipboard = async (text: string) => {
   area.remove();
 };
 
+const resolveDocumentId = (query: URLSearchParams) =>
+  query.get("adv_id") ||
+  query.get("advId") ||
+  query.get("id") ||
+  query.get("docId") ||
+  query.get("documentId") ||
+  query.get("advanceId") ||
+  query.get("advanceNo") ||
+  query.get("documentNo") ||
+  "";
+
 export default function LiffAction() {
   const query = useMemo(() => new URLSearchParams(window.location.search), []);
-  const advId = query.get("adv_id") || query.get("advId") || query.get("id") || "";
+  const advId = resolveDocumentId(query);
   const action = query.get("action") === "reject" ? "reject" : "approve";
   const isReject = action === "reject";
 

@@ -16,7 +16,9 @@ import {
   Timestamp
 } from "firebase/firestore";
 import { db } from "../../lib/firebase";
-import { Employee, UserRole } from "../../types";
+import { Employee, RolePermissionsConfig, UserRole } from "../../types";
+import { mergeRolePermissions, resolvePositionId } from "../../lib/permissionEngine";
+import { sendLineBindInvite } from "../../lib/lineNotify";
 import { 
   Search, 
   Plus, 
@@ -35,7 +37,8 @@ import {
   ChevronDown,
   RefreshCw,
   FileSpreadsheet,
-  AlertCircle
+  AlertCircle,
+  Link2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as XLSX from "xlsx";
@@ -45,10 +48,13 @@ export default function EmployeeManagement() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
+  const [positionFilter, setPositionFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [roleConfig, setRoleConfig] = useState<RolePermissionsConfig | undefined>(undefined);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [bindingInviteIds, setBindingInviteIds] = useState<Set<string>>(new Set());
   const [importProgress, setImportProgress] = useState(0);
   const [importStatus, setImportStatus] = useState<"idle" | "processing" | "success" | "error">("idle");
   const [importSummary, setImportSummary] = useState({ success: 0, failed: 0, errors: [] as string[] });
@@ -65,17 +71,45 @@ export default function EmployeeManagement() {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, "settings", "global"), (snap) => {
+      const data = snap.exists() ? snap.data() : {};
+      setRoleConfig(mergeRolePermissions(data.rolePermissions as RolePermissionsConfig | undefined));
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleSendLineBindInvite = async (employeeId: string) => {
+    setBindingInviteIds((prev) => new Set(prev).add(employeeId));
+    try {
+      const result = await sendLineBindInvite(employeeId);
+      if (result?.status === "skipped") {
+        console.warn(result.message || "LINE bind invite skipped.");
+      }
+    } finally {
+      setBindingInviteIds((prev) => {
+        const next = new Set(prev);
+        next.delete(employeeId);
+        return next;
+      });
+    }
+  };
+
   const filteredEmployees = useMemo(() => {
     return employees.filter(emp => {
       const matchesSearch = 
         emp.name?.toLowerCase().includes(search.toLowerCase()) || 
         emp.employeeCode?.toLowerCase().includes(search.toLowerCase()) ||
-        emp.username?.toLowerCase().includes(search.toLowerCase());
+        emp.username?.toLowerCase().includes(search.toLowerCase()) ||
+        emp.department?.toLowerCase().includes(search.toLowerCase()) ||
+        emp.positionName?.toLowerCase().includes(search.toLowerCase()) ||
+        emp.lineUserId?.toLowerCase().includes(search.toLowerCase());
       const matchesRole = roleFilter === "all" || emp.role === roleFilter;
+      const matchesPosition = positionFilter === "all" || resolvePositionId(emp) === positionFilter;
       const matchesStatus = statusFilter === "all" || emp.status === statusFilter;
-      return matchesSearch && matchesRole && matchesStatus;
+      return matchesSearch && matchesRole && matchesPosition && matchesStatus;
     });
-  }, [employees, search, roleFilter, statusFilter]);
+  }, [employees, search, roleFilter, positionFilter, statusFilter]);
 
   const handleExport = (format: "xlsx" | "csv" | "json") => {
     const data = filteredEmployees.map(({ id, pinHash, ...rest }) => rest);
@@ -217,6 +251,16 @@ export default function EmployeeManagement() {
               <option key={role} value={role}>{role}</option>
             ))}
           </select>
+          <select
+            value={positionFilter}
+            onChange={(e) => setPositionFilter(e.target.value)}
+            className="px-3 py-1.5 bg-white border border-stone-200 rounded-xl text-[11px] font-bold text-stone-600 shrink-0"
+          >
+            <option value="all">ทุกตำแหน่ง</option>
+            {(roleConfig?.roles || []).map((role) => (
+              <option key={role.id} value={role.id}>{role.displayName}</option>
+            ))}
+          </select>
           <select 
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -273,9 +317,30 @@ export default function EmployeeManagement() {
                   <p className="text-[10px] text-stone-500 font-medium flex items-center gap-1">
                     <Building2 className="w-3 h-3" /> {emp.role}
                   </p>
+                  <p className="text-[10px] text-stone-500 font-medium flex items-center gap-1">
+                    <Filter className="w-3 h-3" /> {roleConfig?.roles.find((role) => role.id === resolvePositionId(emp))?.displayName || resolvePositionId(emp)}
+                  </p>
+                  {emp.department && (
+                    <p className="text-[10px] text-stone-500 font-medium flex items-center gap-1">
+                      <Building2 className="w-3 h-3" /> {emp.department}
+                    </p>
+                  )}
+                  <p className={`text-[10px] font-bold flex items-center gap-1 ${emp.lineUserId ? "text-emerald-600" : "text-amber-600"}`}>
+                    <Link2 className="w-3 h-3" /> {emp.lineUserId ? "LINE linked" : "LINE not linked"}
+                  </p>
                 </div>
               </div>
               <div className="flex flex-col gap-2">
+                {!emp.lineUserId && (
+                  <button
+                    onClick={() => handleSendLineBindInvite(emp.id)}
+                    disabled={bindingInviteIds.has(emp.id)}
+                    className="p-2 text-stone-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition disabled:opacity-50"
+                    title="ส่งปุ่มผูก LINE ไปที่กลุ่ม"
+                  >
+                    {bindingInviteIds.has(emp.id) ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
+                  </button>
+                )}
                 <button 
                   onClick={() => setEditingEmployee(emp)}
                   className="p-2 text-stone-400 hover:text-stone-900 hover:bg-stone-50 rounded-xl transition"
@@ -345,8 +410,16 @@ export default function EmployeeManagement() {
                   email: formData.get("email") as string,
                   phone: formData.get("phone") as string,
                   role: formData.get("role") as UserRole,
+                  roleId: formData.get("positionId") as string,
+                  positionId: formData.get("positionId") as string,
+                  positionName: roleConfig?.roles.find((role) => role.id === formData.get("positionId"))?.displayName || "",
                   department: formData.get("department") as string,
                   position: formData.get("position") as string,
+                  managedProjectIds: String(formData.get("managedProjectIds") || "").split(",").map((item) => item.trim()).filter(Boolean),
+                  projectIds: String(formData.get("projectIds") || "").split(",").map((item) => item.trim()).filter(Boolean),
+                  lineUserId: formData.get("lineUserId") as string,
+                  lineDisplayName: formData.get("lineDisplayName") as string,
+                  linePictureUrl: formData.get("linePictureUrl") as string,
                   company: formData.get("company") as string,
                   bankName: formData.get("bankName") as string,
                   bankNo: formData.get("bankNo") as string,
@@ -366,6 +439,7 @@ export default function EmployeeManagement() {
                       createdAt: new Date().toISOString(),
                       pinHash: "default", // Should handle PIN securely
                     });
+                    await handleSendLineBindInvite(newId);
                   }
                   setIsAddModalOpen(false);
                   setEditingEmployee(null);
@@ -424,6 +498,33 @@ export default function EmployeeManagement() {
                     <label className="text-[10px] font-bold text-stone-500 uppercase">ตำแหน่ง</label>
                     <input name="position" defaultValue={editingEmployee?.position} className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-bold" />
                   </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-stone-500 uppercase">Position จาก settings/global</label>
+                  <select name="positionId" defaultValue={resolvePositionId(editingEmployee || undefined)} className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-bold">
+                    {(roleConfig?.roles || []).map((role) => (
+                      <option key={role.id} value={role.id}>{role.displayName} ({role.id})</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-stone-500 uppercase">Managed Project IDs</label>
+                    <input name="managedProjectIds" defaultValue={(editingEmployee?.managedProjectIds || []).join(", ")} className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-bold" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-stone-500 uppercase">Project IDs</label>
+                    <input name="projectIds" defaultValue={(editingEmployee?.projectIds || []).join(", ")} className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-bold" />
+                  </div>
+                </div>
+
+                <div className="space-y-4 pt-4 border-t border-stone-100">
+                  <h4 className="text-xs font-bold text-stone-400 uppercase tracking-widest">LINE Profile</h4>
+                  <input name="lineUserId" placeholder="LINE User ID ต้องขึ้นต้น U" defaultValue={editingEmployee?.lineUserId} className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-bold" />
+                  <input name="lineDisplayName" placeholder="LINE Display Name" defaultValue={editingEmployee?.lineDisplayName} className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-bold" />
+                  <input name="linePictureUrl" placeholder="LINE Picture URL" defaultValue={editingEmployee?.linePictureUrl} className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-bold" />
                 </div>
 
                 <div className="space-y-4 pt-4 border-t border-stone-100">

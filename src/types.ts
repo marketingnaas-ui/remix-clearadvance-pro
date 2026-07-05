@@ -10,6 +10,91 @@ export enum UserRole {
   ADMIN = "Admin"
 }
 
+export type PositionId = "employee" | "manager" | "accountant" | "admin" | "pm" | "foreman" | "accounting" | "executive" | "ceo" | string;
+
+export type PermissionAction =
+  | "viewDashboard"
+  | "createAdvance"
+  | "approveAdvance"
+  | "rejectAdvance"
+  | "batchApproveAdvance"
+  | "uploadTransferSlip"
+  | "submitClearance"
+  | "reviewClearance"
+  | "closeAdvance"
+  | "viewExecutiveReport"
+  | "manageSettings"
+  | "manageUsers"
+  | "manageProjects"
+  | "manageRoles";
+
+export interface RolePermission {
+  id: PositionId;
+  name: string;
+  displayName: string;
+  description: string;
+  isActive: boolean;
+  level: number;
+  permissions: Record<PermissionAction, boolean>;
+  approvalScope: {
+    projectScope: "own" | "own_project" | "all_projects" | "selected_projects";
+    maxAmountPerItem: number | null;
+    maxAmountPerDay: number | null;
+    canApproveOwnRequest: boolean;
+    requirePin: boolean;
+    allowLineLiffApproval: boolean;
+  };
+  dashboard: {
+    heroType: "profile" | "approval" | "accounting" | "executive" | "system";
+    menuVariant: string;
+    kpiPreset: string;
+    quickActions?: DashboardActionConfig[];
+    bottomNav?: DashboardActionConfig[];
+    kpis?: string[];
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DashboardActionConfig {
+  id: string;
+  label: string;
+  targetTab: string;
+  icon?: string;
+  isActive: boolean;
+  sortOrder: number;
+}
+
+export interface RolePermissionsConfig {
+  roles: RolePermission[];
+}
+
+export interface ApprovalWorkflowRule {
+  id: string;
+  name: string;
+  documentType: "ADVANCE" | "CLEARANCE" | string;
+  minAmount: number;
+  maxAmount: number | null;
+  projectScope: "own" | "own_project" | "all_projects" | "selected_projects";
+  selectedProjectIds: string[];
+  approverRoleIds: string[];
+  approverPositionIds: string[];
+  requiredApprovalCount: number;
+  approvalOrder: "any" | "sequential";
+  allowLineLiffApproval: boolean;
+  allowBatchApproval: boolean;
+  canApproveOwnRequest: boolean;
+  isActive: boolean;
+  threshold?: number;
+  approverRoles?: string[];
+}
+
+export interface ApprovalWorkflowConfig {
+  threshold?: number;
+  autoApproveAccounting?: boolean;
+  rules: ApprovalWorkflowRule[];
+}
+
 export enum AdvanceStatus {
   DRAFT = "DRAFT", // บันทึกร่าง
   PENDING_APPROVAL = "PENDING_APPROVAL", // รออนุมัติ
@@ -74,7 +159,12 @@ export interface Employee {
   lineUserId?: string;
   lineDisplayName?: string;
   linePictureUrl?: string;
+  roleId?: string;
+  positionId?: PositionId;
+  positionName?: string;
   department?: string;
+  managedProjectIds?: string[];
+  projectIds?: string[];
   position?: string;
   company?: string;
   bankName: string;
@@ -268,6 +358,12 @@ export interface VaultFile {
   driveFolderUrl?: string;
   driveFileId?: string;
   driveFileUrl?: string;
+  driveUrl?: string;
+  syncStatus?: "PENDING" | "SUCCESS" | "FAILED" | string;
+  syncUpdatedAt?: string;
+  sourceUrl?: string;
+  clrId?: string;
+  errorMessage?: string;
   mimeType?: string;
   fileSize?: number;
   fileHash?: string;

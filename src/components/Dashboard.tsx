@@ -7,7 +7,7 @@ import React, { useState, useEffect } from "react";
 import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { handleFirestoreError, OperationType } from "../lib/errorUtils";
-import { Advance, AdvanceStatus, Employee, UserRole, ActionType, AuditLog } from "../types";
+import { Advance, AdvanceStatus, Employee, UserRole, ActionType, AuditLog, RolePermissionsConfig } from "../types";
 import ClearanceSchedule from "./dashboard/ClearanceSchedule";
 import { exportToExcel } from "../lib/excelExport";
 import { motion } from "motion/react";
@@ -41,6 +41,7 @@ import {
   BarChart3
 } from "lucide-react";
 import regeneratedHero from "../assets/images/regenerated_image_1782709418470.png";
+import { filterAdvancesByVisibility, getHeroActions, getRolePermission, mergeRolePermissions, positionDisplayNames, resolvePositionId } from "../lib/permissionEngine";
 
 interface DashboardProps {
   currentEmployee: Employee;
@@ -56,6 +57,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [draftClearingLogs, setDraftClearingLogs] = useState<any[]>([]);
+  const [roleConfig, setRoleConfig] = useState<RolePermissionsConfig | undefined>(undefined);
 
   // Search & Filter state (for Accountant and general views)
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -70,11 +72,20 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
   const [actionLoading, setActionLoading] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [dashboardImage, setDashboardImage] = useState<string>(currentEmployee.profilePhotoURL || currentEmployee.profileImage || "");
+  const [dashboardImage, setDashboardImage] = useState<string>(currentEmployee.profilePhotoURL || currentEmployee.profileImage || currentEmployee.linePictureUrl || "");
   const [isEditingImage, setIsEditingImage] = useState<boolean>(false);
   const [imageScale, setImageScale] = useState<number>(currentEmployee.imageScale || 1);
   const [imagePosition, setImagePosition] = useState<{x: number, y: number}>(currentEmployee.imagePosition || {x: 50, y: 50});
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const positionId = resolvePositionId(currentEmployee);
+  const activeRoleConfig = getRolePermission(currentEmployee, roleConfig);
+  const positionName = currentEmployee.positionName || activeRoleConfig.displayName || positionDisplayNames[positionId] || currentEmployee.role;
+  const isRequesterPosition = activeRoleConfig.permissions.createAdvance || activeRoleConfig.permissions.submitClearance;
+  const isExecutivePosition = activeRoleConfig.permissions.approveAdvance || activeRoleConfig.permissions.uploadTransferSlip;
+  const isAccountingPosition = activeRoleConfig.permissions.reviewClearance || activeRoleConfig.permissions.closeAdvance;
+  const isAdminPosition = activeRoleConfig.permissions.manageSettings || activeRoleConfig.permissions.manageUsers;
+  const canSeeAllDocuments = activeRoleConfig.approvalScope.projectScope === "all_projects";
+  const heroActions = getHeroActions(currentEmployee, roleConfig);
   const heroImageSrc = dashboardImage
     ? dashboardImage.startsWith("data:")
       ? dashboardImage
@@ -92,6 +103,16 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
   }, []);
 
   useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, "settings", "global"), (snap) => {
+      const data = snap.exists() ? snap.data() : {};
+      setRoleConfig(mergeRolePermissions(data.rolePermissions as RolePermissionsConfig | undefined));
+    }, (err) => {
+      console.warn("Could not load dashboard role config:", err);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
     if (successMessage || errorMessage) {
       const timer = setTimeout(() => {
         setSuccessMessage(null);
@@ -102,12 +123,13 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
   }, [successMessage, errorMessage]);
 
   useEffect(() => {
-    setDashboardImage(currentEmployee.profilePhotoURL || currentEmployee.profileImage || "");
+    setDashboardImage(currentEmployee.profilePhotoURL || currentEmployee.profileImage || currentEmployee.linePictureUrl || "");
     setImageScale(currentEmployee.imageScale || 1);
     setImagePosition(currentEmployee.imagePosition || { x: 50, y: 50 });
   }, [
     currentEmployee.profilePhotoURL,
     currentEmployee.profileImage,
+    currentEmployee.linePictureUrl,
     currentEmployee.imageScale,
     currentEmployee.imagePosition,
   ]);
@@ -125,8 +147,8 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
     const advancesRef = collection(db, "advances");
     let q = query(advancesRef);
 
-    // If standard employee, filter only their own requests
-    if (currentEmployee.role === UserRole.EMPLOYEE) {
+    // Requester positions see only their own requests; oversight positions see all.
+    if (!canSeeAllDocuments) {
       q = query(advancesRef, where("employeeId", "==", currentEmployee.id));
     }
 
@@ -137,18 +159,18 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
       });
       // Sort by newest created
       list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-      setAdvances(list);
+      setAdvances(filterAdvancesByVisibility(currentEmployee, list, roleConfig));
       setLoading(false);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, "advances", false);
     });
 
     return () => unsubscribe();
-  }, [currentEmployee]);
+  }, [currentEmployee, canSeeAllDocuments, roleConfig]);
 
   // Fetch draft clearing logs for standard employees
   useEffect(() => {
-    if (currentEmployee.role === UserRole.EMPLOYEE) {
+    if (isRequesterPosition) {
       const q = query(
         collection(db, "clearingLogs"),
         where("status", "==", "DRAFT")
@@ -167,11 +189,11 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
       });
       return () => unsubscribe();
     }
-  }, [currentEmployee]);
+  }, [currentEmployee, isRequesterPosition]);
 
   // Fetch employees list (for Manager/Accountant count and reference)
   useEffect(() => {
-    if (currentEmployee.role !== UserRole.EMPLOYEE) {
+    if (!isRequesterPosition) {
       const unsubscribe = onSnapshot(collection(db, "employees"), (snapshot) => {
         const list: Employee[] = [];
         snapshot.forEach((docSnap) => {
@@ -183,7 +205,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
       });
       return () => unsubscribe();
     }
-  }, [currentEmployee]);
+  }, [currentEmployee, isRequesterPosition]);
 
   // Fetch audit logs (for Notification list & timeline)
   useEffect(() => {
@@ -467,6 +489,18 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
     };
   };
   const heroStats = getStats();
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "สวัสดีตอนเช้า" : hour < 17 ? "สวัสดีตอนบ่าย" : "สวัสดีตอนเย็น";
+  const getActionIcon = (tabId: string) => {
+    if (tabId === "request") return Send;
+    if (tabId === "clearance") return Receipt;
+    if (tabId === "approval") return CheckCircle2;
+    if (tabId === "accounting") return FileCheck2;
+    if (tabId === "close_account") return FileCheck2;
+    if (tabId === "dbd") return BarChart3;
+    if (tabId === "admin") return User;
+    return History;
+  };
 
   return (
     <div className="space-y-6 animate-fade-in" id="dashboard_tab">
@@ -780,12 +814,12 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                       className="inline-block px-2 py-0.5 text-[#856000] font-semibold uppercase rounded-full shadow-sm"
                       style={{ fontSize: '11px', background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)' }}
                     >
-                      {currentEmployee.role}
+                      {positionName}
                     </span>
                   </div>
                   <p className="font-normal" style={{ fontSize: '12px', color: 'rgba(255,255,255,0.9)', lineHeight: '1.3' }}>
-                    {currentEmployee.name}<br/>
-                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)' }}>have a good day :)</span>
+                    {greeting} {currentEmployee.name}<br/>
+                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)' }}>{currentEmployee.department || "Have a nice day"}</span>
                   </p>
                   <p className="text-emerald-400 font-medium flex items-center gap-1.5" style={{ fontSize: '12px', marginTop: '2px' }}>
                     <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]"></span>
@@ -896,6 +930,27 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
             </div>
           </div>
 
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+            {heroActions.map((action, index) => {
+              const Icon = getActionIcon(action.targetTab);
+              return (
+                <button
+                  key={`${action.id}-${index}`}
+                  onClick={() => action.targetTab === "notifications" ? setIsNotificationOpen(true) : onNavigate(action.targetTab)}
+                  className="bg-white border border-stone-200 hover:border-stone-400 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
+                >
+                  <div className="w-10 h-10 bg-stone-900 group-hover:bg-stone-800 text-stone-50 rounded-xl flex items-center justify-center shrink-0">
+                    <Icon className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-stone-950 text-xs">{action.label}</h4>
+                    <p className="text-[10px] text-stone-400 mt-0.5">{positionName}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
       {/* Global Status Alerts or Toast Messages */}
       {(successMessage || errorMessage) && (
         <motion.div 
@@ -924,7 +979,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
       {/* ==================================================================== */}
       {/* 1. EMPLOYEE DASHBOARD VIEW */}
       {/* ==================================================================== */}
-      {currentEmployee.role === UserRole.EMPLOYEE && (
+      {isRequesterPosition && (
         <div className="space-y-6">
           {/* Top Menu Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
@@ -1040,7 +1095,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
           </div>
 
           {/* Drafts Section for Employee */}
-          {currentEmployee.role === UserRole.EMPLOYEE && (draftAdvances.length > 0 || draftClearingLogs.length > 0) && (
+          {isRequesterPosition && (draftAdvances.length > 0 || draftClearingLogs.length > 0) && (
             <div className="bg-amber-50/50 border border-amber-200 rounded-2xl p-5 md:p-6 shadow-xs space-y-4 animate-fade-in" id="drafts_section">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -1182,7 +1237,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
       {/* ==================================================================== */}
       {/* 2. MANAGER / APPROVER DASHBOARD VIEW */}
       {/* ==================================================================== */}
-      {currentEmployee.role === UserRole.MANAGER && (
+      {(isExecutivePosition || isAdminPosition) && (
         <div className="space-y-6">
           {/* Manager KPI Dashboard */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
@@ -1456,7 +1511,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
       {/* ==================================================================== */}
       {/* 3. ACCOUNTING DASHBOARD VIEW */}
       {/* ==================================================================== */}
-      {(currentEmployee.role === UserRole.ACCOUNTANT || currentEmployee.role === UserRole.ADMIN) && (
+      {(isAccountingPosition || isAdminPosition) && (
         <div className="space-y-6">
           {/* KPI Boxes */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
@@ -2005,7 +2060,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                 </button>
 
                 {/* Manager actions if pending */}
-                {currentEmployee.role === UserRole.MANAGER && selectedAdv.status === AdvanceStatus.PENDING_APPROVAL && (
+                {(isExecutivePosition || isAdminPosition) && selectedAdv.status === AdvanceStatus.PENDING_APPROVAL && (
                   <>
                     <button
                       type="button"
