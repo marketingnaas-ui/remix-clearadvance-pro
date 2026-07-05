@@ -202,13 +202,26 @@ export default function UploadSlipLiff() {
     setPreviewUrl(null);
   };
 
+  const parseServerUploadResponse = async (response: Response) => {
+    const text = await response.text();
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch {
+      return {
+        error: text || `Server returned HTTP ${response.status}`,
+        raw: text,
+      };
+    }
+  };
+
   const uploadViaServer = async (selectedFile: File) => {
     const form = new FormData();
     form.append("advId", advId || "");
     form.append("slip", selectedFile);
     const response = await fetch("/api/line/upload-slip", { method: "POST", body: form });
-    const payload = await response.json();
+    const payload = await parseServerUploadResponse(response);
     if (!response.ok) throw new Error(payload?.error || "อัปโหลดผ่าน server ไม่สำเร็จ");
+    if (!payload?.url) throw new Error("Server upload succeeded but did not return slip URL.");
     return payload.url as string;
   };
 
@@ -235,12 +248,7 @@ export default function UploadSlipLiff() {
     setError(null);
 
     try {
-      try {
-        await uploadViaServer(file);
-      } catch (serverError) {
-        console.warn("Server slip upload failed, using client fallback:", serverError);
-        await uploadViaClientFallback(file);
-      }
+      await uploadViaServer(file);
 
       if (liff.isInClient()) {
         liff.closeWindow();
