@@ -7,7 +7,7 @@ import React, { useState, useEffect } from "react";
 import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { handleFirestoreError, OperationType } from "../lib/errorUtils";
-import { Advance, AdvanceStatus, Employee, UserRole, ActionType, AuditLog, RolePermissionsConfig } from "../types";
+import { Advance, AdvanceStatus, DashboardActionConfig, Employee, UserRole, ActionType, AuditLog, RolePermissionsConfig } from "../types";
 import ClearanceSchedule from "./dashboard/ClearanceSchedule";
 import { exportToExcel } from "../lib/excelExport";
 import { motion } from "motion/react";
@@ -498,8 +498,106 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
     if (tabId === "accounting") return FileCheck2;
     if (tabId === "close_account") return FileCheck2;
     if (tabId === "dbd") return BarChart3;
+    if (tabId === "doc_tracking") return FileCheck2;
+    if (tabId === "vault") return HardDrive;
+    if (tabId === "reports") return BarChart3;
     if (tabId === "admin") return User;
     return History;
+  };
+
+  const openItems = advances.filter((a) => ![AdvanceStatus.DRAFT, AdvanceStatus.CLOSED, AdvanceStatus.REJECTED].includes(a.status));
+  const allOutstandingAmount = advances.reduce((sum, a) => sum + (a.outstandingAmount || 0), 0);
+  const waitingTransferCount = advances.filter((a) => a.status === AdvanceStatus.WAITING_TRANSFER).length;
+  const returnedCount = advances.filter((a) => a.status === AdvanceStatus.RETURNED).length;
+  const currentMonthItems = nonDraftAdvances.filter((a) => {
+    const created = new Date(a.createdAt);
+    const now = new Date();
+    return created.getFullYear() === now.getFullYear() && created.getMonth() === now.getMonth();
+  }).length;
+
+  const makeShortcut = (id: string, label: string, targetTab: string, icon?: string): DashboardActionConfig => ({
+    id,
+    label,
+    targetTab,
+    icon,
+    isActive: true,
+    sortOrder: 1,
+  });
+
+  const fallbackShortcuts: DashboardActionConfig[] = (() => {
+    if (isAdminPosition) return [
+      makeShortcut("approval", "อนุมัติ", "approval", "CheckSquare"),
+      makeShortcut("accounting", "บัญชี", "accounting", "FileCheck2"),
+      makeShortcut("admin", "ตั้งค่า", "admin", "Settings"),
+      makeShortcut("reports", "รายงาน", "reports", "BarChart3"),
+    ];
+    if (isAccountingPosition) return [
+      makeShortcut("accounting", "ตรวจบัญชี", "accounting", "FileCheck2"),
+      makeShortcut("doc_tracking", "ติดตามเอกสาร", "doc_tracking", "FileCheck"),
+      makeShortcut("dbd", "DBD", "dbd", "BarChart3"),
+      makeShortcut("close_account", "ปิดบัญชี", "close_account", "CheckCircle2"),
+    ];
+    if (isExecutivePosition) return [
+      makeShortcut("approval", "อนุมัติ", "approval", "CheckSquare"),
+      makeShortcut("request", "ขอเบิก", "request", "Send"),
+      makeShortcut("reports", "รายงาน", "reports", "BarChart3"),
+      makeShortcut("audit", "ประวัติ", "audit", "FileText"),
+    ];
+    return [
+      makeShortcut("request", "ขอเบิก", "request", "Send"),
+      makeShortcut("clearance", "เคลียร์ยอด", "clearance", "Receipt"),
+      makeShortcut("audit", "ประวัติ", "audit", "FileText"),
+      makeShortcut("vault", "คลังเอกสาร", "vault", "HardDrive"),
+    ];
+  })();
+
+  const positionQuickActions = [
+    ...heroActions.filter((action) => action.isActive !== false),
+    ...fallbackShortcuts,
+  ].filter((action, index, list) => list.findIndex((item) => item.targetTab === action.targetTab) === index).slice(0, 4);
+
+  const kpiCatalog = {
+    myOpenItems: { label: "งานค้างของฉัน", value: String(openItems.length), icon: Clock, tone: "amber" },
+    myOutstandingAmount: { label: "ยอดคงค้างของฉัน", value: formatCurrency(empOutstandingBalance), icon: Wallet, tone: "indigo" },
+    myMonthlyItems: { label: "รายการเดือนนี้", value: `${currentMonthItems} รายการ`, icon: Calendar, tone: "emerald" },
+    myDraftItems: { label: "แบบร่าง", value: `${draftAdvances.length} รายการ`, icon: FileText, tone: "stone" },
+    myMoneyToClear: { label: "ยอดรอเคลียร์", value: formatCurrency(empMoneyToClear), icon: Receipt, tone: "blue" },
+    myClosedAmount: { label: "ยอดปิดแล้ว", value: formatCurrency(empClosedAmount), icon: FileCheck2, tone: "emerald" },
+    pendingApprovalCount: { label: "รออนุมัติ", value: `${managerPendingCount} รายการ`, icon: Clock, tone: "amber" },
+    pendingApprovalAmount: { label: "ยอดรออนุมัติ", value: formatCurrency(managerPendingAmount), icon: DollarSign, tone: "indigo" },
+    recentRequestCount: { label: "คำขอใหม่ 7 วัน", value: `${managerRecentCount} คำขอ`, icon: Calendar, tone: "emerald" },
+    totalEmployeeCount: { label: "พนักงานทั้งหมด", value: `${managerTotalEmployees} คน`, icon: User, tone: "stone" },
+    allOpenItems: { label: "รายการเปิดอยู่", value: `${openItems.length} รายการ`, icon: FileText, tone: "blue" },
+    allOutstandingAmount: { label: "ยอดคงค้างรวม", value: formatCurrency(allOutstandingAmount), icon: Wallet, tone: "indigo" },
+    pendingClearanceAmount: { label: "ยอดค้างเคลียร์รวม", value: formatCurrency(acctPendingClearValue), icon: Wallet, tone: "indigo" },
+    closedAmount: { label: "ยอดปิดบัญชีแล้ว", value: formatCurrency(acctClosedValue), icon: FileCheck2, tone: "emerald" },
+    totalAdvanceItems: { label: "จำนวนรายการทั้งหมด", value: `${acctTotalItems} รายการ`, icon: FileText, tone: "stone" },
+    totalAdvanceAmount: { label: "มูลค่าคำขอสะสม", value: formatCurrency(acctTotalValue), icon: DollarSign, tone: "indigo" },
+    waitingTransferCount: { label: "รอโอนเงิน", value: `${waitingTransferCount} รายการ`, icon: ArrowRightLeft, tone: "blue" },
+    returnedCount: { label: "ตีกลับ", value: `${returnedCount} รายการ`, icon: AlertCircle, tone: "red" },
+  };
+
+  type KpiKey = keyof typeof kpiCatalog;
+  const fallbackKpisByPosition: Record<string, KpiKey[]> = {
+    employee: ["myOpenItems", "myOutstandingAmount", "myMonthlyItems", "myDraftItems", "myMoneyToClear", "myClosedAmount"],
+    manager: ["pendingApprovalCount", "pendingApprovalAmount", "recentRequestCount", "totalEmployeeCount", "allOpenItems", "allOutstandingAmount"],
+    pm: ["pendingApprovalCount", "pendingApprovalAmount", "recentRequestCount", "allOpenItems", "allOutstandingAmount", "totalAdvanceItems"],
+    accountant: ["pendingClearanceAmount", "closedAmount", "totalAdvanceItems", "totalAdvanceAmount", "waitingTransferCount", "returnedCount"],
+    accounting: ["pendingClearanceAmount", "closedAmount", "totalAdvanceItems", "totalAdvanceAmount", "waitingTransferCount", "returnedCount"],
+    admin: ["pendingApprovalCount", "pendingClearanceAmount", "totalAdvanceAmount", "closedAmount", "totalEmployeeCount", "allOpenItems"],
+  };
+  const configuredKpiKeys = (activeRoleConfig.dashboard?.kpis || []).filter((key): key is KpiKey => key in kpiCatalog);
+  const positionKpiKeys = [
+    ...configuredKpiKeys,
+    ...(fallbackKpisByPosition[positionId] || fallbackKpisByPosition.employee),
+  ].filter((key, index, list) => list.indexOf(key) === index).slice(0, 6);
+  const kpiToneClass: Record<string, string> = {
+    amber: "bg-amber-50 text-amber-700 border-amber-100",
+    indigo: "bg-indigo-50 text-indigo-700 border-indigo-100",
+    emerald: "bg-emerald-50 text-emerald-700 border-emerald-100",
+    stone: "bg-stone-50 text-stone-700 border-stone-200",
+    blue: "bg-blue-50 text-blue-700 border-blue-100",
+    red: "bg-red-50 text-red-700 border-red-100",
   };
 
   return (
@@ -931,7 +1029,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-            {heroActions.map((action, index) => {
+            {positionQuickActions.map((action, index) => {
               const Icon = getActionIcon(action.targetTab);
               return (
                 <button
@@ -947,6 +1045,24 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                     <p className="text-[10px] text-stone-400 mt-0.5">{positionName}</p>
                   </div>
                 </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 md:gap-4">
+            {positionKpiKeys.map((key) => {
+              const kpi = kpiCatalog[key];
+              const Icon = kpi.icon;
+              return (
+                <div key={key} className="bg-white border border-stone-200 rounded-2xl p-4 shadow-sm flex flex-col justify-between min-h-[116px]">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-[10px] md:text-xs font-bold text-stone-400 uppercase tracking-wider leading-snug">{kpi.label}</p>
+                    <div className={`p-2 rounded-xl border shrink-0 ${kpiToneClass[kpi.tone] || kpiToneClass.stone}`}>
+                      <Icon className="w-4 h-4" />
+                    </div>
+                  </div>
+                  <p className="text-base md:text-xl font-black text-stone-900 font-mono tracking-tight leading-tight mt-4 break-words">{kpi.value}</p>
+                </div>
               );
             })}
           </div>

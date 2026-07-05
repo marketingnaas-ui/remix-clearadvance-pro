@@ -46,7 +46,7 @@ const emptyRole = (): RolePermission => ({
     kpiPreset: "custom",
     quickActions: makeActions([["action1", "Action 1", "dashboard"], ["action2", "Action 2", "dashboard"], ["action3", "Action 3", "dashboard"], ["action4", "Action 4", "dashboard"]]),
     bottomNav: makeActions([["home", "หน้าหลัก", "dashboard"], ["more", "เพิ่มเติม", "more"]]),
-    kpis: ["KPI 1", "KPI 2", "KPI 3", "KPI 4"],
+    kpis: ["myOpenItems", "myOutstandingAmount", "myMonthlyItems", "myDraftItems", "myMoneyToClear", "myClosedAmount"],
   },
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
@@ -223,7 +223,7 @@ export default function RoleApprovalMatrix() {
             <DashboardConfigEditor title="Bottom Navigation" items={selectedRole.dashboard.bottomNav || []} onChange={(index, patch) => updateAction("bottomNav", index, patch)} onAdd={() => updateRole(selectedRole.id, { dashboard: { ...selectedRole.dashboard, bottomNav: [...(selectedRole.dashboard.bottomNav || []), { id: `nav-${Date.now()}`, label: "New Nav", targetTab: "dashboard", isActive: true, sortOrder: (selectedRole.dashboard.bottomNav || []).length + 1 }] } })} />
 
             <div className="bg-white border border-stone-200 rounded-2xl p-4">
-              <h4 className="text-xs font-black text-stone-900 mb-3">KPI Labels</h4>
+              <h4 className="text-xs font-black text-stone-900 mb-3">KPI Keys (6 recommended)</h4>
               <textarea value={(selectedRole.dashboard.kpis || []).join("\n")} onChange={(event) => updateRole(selectedRole.id, { dashboard: { ...selectedRole.dashboard, kpis: event.target.value.split("\n").filter(Boolean) } })} className="w-full min-h-28 px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs" />
             </div>
 
