@@ -99,7 +99,8 @@ export default function RoleApprovalMatrix() {
     };
   }, []);
 
-  const selectedRole = roleConfig.roles.find((role) => role.id === selectedRoleId) || roleConfig.roles[0];
+  const selectedRole = roleConfig.roles.find((role) => role.id === selectedRoleId) || roleConfig.roles[0] || defaultRolePermissions.roles[0];
+  const selectedPermissions = selectedRole.permissions || defaultRolePermissions.roles[0].permissions;
   const testResult = useMemo(() => {
     const employee = employees.find((item) => item.id === testEmployeeId);
     if (!employee) return null;
@@ -210,8 +211,8 @@ export default function RoleApprovalMatrix() {
               <h4 className="text-xs font-black text-stone-900 mb-3">Permissions</h4>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                 {allPermissionKeys.map((key) => (
-                  <label key={key} className={`rounded-xl border px-3 py-2 text-[11px] font-bold flex items-center gap-2 ${selectedRole.permissions[key] ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-stone-50 border-stone-200 text-stone-500"}`}>
-                    <input type="checkbox" checked={selectedRole.permissions[key]} onChange={(event) => updateRole(selectedRole.id, { permissions: { ...selectedRole.permissions, [key]: event.target.checked } })} />
+                  <label key={key} className={`rounded-xl border px-3 py-2 text-[11px] font-bold flex items-center gap-2 ${selectedPermissions[key] ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-stone-50 border-stone-200 text-stone-500"}`}>
+                    <input type="checkbox" checked={selectedPermissions[key]} onChange={(event) => updateRole(selectedRole.id, { permissions: { ...selectedPermissions, [key]: event.target.checked } })} />
                     {permissionLabels[key]}
                   </label>
                 ))}

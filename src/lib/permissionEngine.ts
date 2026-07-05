@@ -287,13 +287,19 @@ export function getEmployeeEffectiveRole(employee: Partial<Employee> | null | un
   const roleConfig = "roles" in (settings || {}) ? settings as RolePermissionsConfig : (settings as PermissionSettings | undefined)?.rolePermissions;
   const roles = mergeRolePermissions(roleConfig).roles;
   const roleId = resolvePositionId(employee);
-  return roles.find((role) => role.id === roleId) || roles.find((role) => normalizeRoleId(role.id) === normalizeRoleId(roleId));
+  return roles.find((role) => role.id === roleId)
+    || roles.find((role) => normalizeRoleId(role.id) === normalizeRoleId(roleId))
+    || roles.find((role) => role.id === "employee")
+    || defaultRolePermissions.roles[0];
 }
 
 export function getRolePermission(roleIdOrEmployee: string | Partial<Employee>, settings?: PermissionSettings | RolePermissionsConfig): RolePermission | undefined {
   const roleConfig = "roles" in (settings || {}) ? settings as RolePermissionsConfig : (settings as PermissionSettings | undefined)?.rolePermissions;
   const id = typeof roleIdOrEmployee === "string" ? normalizeRoleId(roleIdOrEmployee) : resolvePositionId(roleIdOrEmployee);
-  return mergeRolePermissions(roleConfig).roles.find((role) => role.id === id || normalizeRoleId(role.id) === id);
+  const roles = mergeRolePermissions(roleConfig).roles;
+  return roles.find((role) => role.id === id || normalizeRoleId(role.id) === id)
+    || roles.find((role) => role.id === "employee")
+    || defaultRolePermissions.roles[0];
 }
 
 export function hasPermission(employee: Partial<Employee>, action: PermissionAction, config?: RolePermissionsConfig): boolean {
@@ -326,7 +332,7 @@ const roleAllowedByRule = (role: RolePermission | undefined, rule?: ApprovalWork
 
 const projectAllowed = (employee: Partial<Employee>, advance: Partial<Advance>, role: RolePermission | undefined, rule?: ApprovalWorkflowRule) => {
   const projectId = projectIdOf(advance);
-  const scope = rule?.projectScope || role?.approvalScope.projectScope || "own_project";
+  const scope = rule?.projectScope || role?.approvalScope?.projectScope || "own_project";
   if (scope === "all_projects") return true;
   if (scope === "selected_projects") return Boolean(rule?.selectedProjectIds?.includes(projectId));
   if (scope === "own") return advance.employeeId === employee.id || advance.employeeId === employee.employeeId;
@@ -334,7 +340,7 @@ const projectAllowed = (employee: Partial<Employee>, advance: Partial<Advance>, 
 };
 
 const roleAmountAllowed = (role: RolePermission | undefined, amount: number) => {
-  const limit = role?.approvalScope.maxAmountPerItem;
+  const limit = role?.approvalScope?.maxAmountPerItem;
   return limit === null || limit === undefined || amount <= Number(limit);
 };
 
@@ -343,7 +349,7 @@ const result = (allowed: boolean, reason: string, matchedRole?: RolePermission, 
   reason,
   matchedRole,
   matchedRule,
-  allowedActions: matchedRole ? allPermissionKeys.filter((key) => matchedRole.permissions[key]) : [],
+  allowedActions: matchedRole ? allPermissionKeys.filter((key) => matchedRole.permissions?.[key]) : [],
   ...extra,
 });
 
@@ -352,7 +358,7 @@ export function canUserPerformAction(user: Partial<Employee> | null | undefined,
   if (!user) return result(false, "employee not found", role);
   if (!isEmployeeActive(user)) return result(false, "employee inactive or disabled", role);
   if (!role || role.isActive === false) return result(false, "role/position inactive", role);
-  if (!role.permissions[action]) return result(false, "missing permission", role);
+  if (!role.permissions?.[action]) return result(false, "missing permission", role);
   if (context.advance && ["approveAdvance", "rejectAdvance"].includes(action)) {
     return action === "approveAdvance"
       ? canApproveAdvance(user as Employee, context.advance, settings, context.source)
@@ -367,7 +373,7 @@ export function canApproveAdvance(user: Partial<Employee> | null | undefined, ad
   if (!advance) return result(false, "advance not found", role);
   if (!isEmployeeActive(user)) return result(false, "employee inactive or disabled", role);
   if (!role || role.isActive === false) return result(false, "role/position inactive", role);
-  if (role.permissions.approveAdvance !== true) return result(false, "role does not allow approveAdvance", role);
+  if (role.permissions?.approveAdvance !== true) return result(false, "role does not allow approveAdvance", role);
   if (advance.status !== AdvanceStatus.PENDING_APPROVAL && String(advance.status) !== "PENDING_APPROVAL") return result(false, "advance is not PENDING_APPROVAL", role);
 
   const amount = amountOf(advance);
@@ -376,8 +382,8 @@ export function canApproveAdvance(user: Partial<Employee> | null | undefined, ad
   const amountPass = roleAmountAllowed(role, amount);
   const projectPass = Boolean(matchedRule && projectAllowed(user, advance, role, matchedRule));
   const rulePass = Boolean(matchedRule && roleAllowedByRule(role, matchedRule));
-  const selfPass = (matchedRule?.canApproveOwnRequest ?? role.approvalScope.canApproveOwnRequest) || ![user.id, user.employeeId].filter(Boolean).includes(String(advance.employeeId || ""));
-  const linePass = source !== "LINE_LIFF" || (isValidLineUserId(resolveEmployeeLineUserId(user)) && role.approvalScope.allowLineLiffApproval && (matchedRule?.allowLineLiffApproval ?? false));
+  const selfPass = (matchedRule?.canApproveOwnRequest ?? role.approvalScope?.canApproveOwnRequest) || ![user.id, user.employeeId].filter(Boolean).includes(String(advance.employeeId || ""));
+  const linePass = source !== "LINE_LIFF" || (isValidLineUserId(resolveEmployeeLineUserId(user)) && role.approvalScope?.allowLineLiffApproval && (matchedRule?.allowLineLiffApproval ?? false));
   const allowed = Boolean(matchedRule && amountPass && projectPass && rulePass && selfPass && linePass);
 
   const reason = allowed ? "allowed" : [
@@ -391,7 +397,7 @@ export function canApproveAdvance(user: Partial<Employee> | null | undefined, ad
 
   return result(allowed, reason, role, matchedRule, {
     validLineUserId: isValidLineUserId(resolveEmployeeLineUserId(user)),
-    canApproveViaLine: isValidLineUserId(resolveEmployeeLineUserId(user)) && role.approvalScope.allowLineLiffApproval && Boolean(matchedRule?.allowLineLiffApproval),
+    canApproveViaLine: isValidLineUserId(resolveEmployeeLineUserId(user)) && Boolean(role.approvalScope?.allowLineLiffApproval) && Boolean(matchedRule?.allowLineLiffApproval),
     projectPass,
     amountPass,
   });
@@ -442,13 +448,13 @@ export function canPerformAdvanceAction(params: {
 }
 
 export function getHeroActions(employee: Partial<Employee>, config?: RolePermissionsConfig): DashboardActionConfig[] {
-  return (getEmployeeEffectiveRole(employee, { rolePermissions: config })?.dashboard.quickActions || [])
+  return (getEmployeeEffectiveRole(employee, { rolePermissions: config })?.dashboard?.quickActions || [])
     .filter((item) => item.isActive !== false)
     .sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
 export function getBottomNavActions(employee: Partial<Employee>, config?: RolePermissionsConfig): DashboardActionConfig[] {
-  return (getEmployeeEffectiveRole(employee, { rolePermissions: config })?.dashboard.bottomNav || [])
+  return (getEmployeeEffectiveRole(employee, { rolePermissions: config })?.dashboard?.bottomNav || [])
     .filter((item) => item.isActive !== false)
     .sort((a, b) => a.sortOrder - b.sortOrder);
 }
