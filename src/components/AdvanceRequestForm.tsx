@@ -11,6 +11,7 @@ import { Send, FileText, Calendar, Building2, User, Landmark, DollarSign, Plus, 
 import { generateFormattedId, DEFAULT_DOCUMENT_FORMATS } from "../lib/idGenerator";
 import { triggerAutoSyncSheetsIfEnabled, triggerAutoSyncVaultFoldersIfEnabled } from "../lib/workspaceSync";
 import { sendLineNotification } from "../lib/lineNotify";
+import { uploadBase64 } from "../lib/storage";
 import ImagePreviewModal from "./ImagePreviewModal";
 
 interface AdvanceRequestFormProps {
@@ -147,9 +148,9 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
       }
       if (editingDraft.customTransferAccount) {
         setUseCustomAccount(true);
-        setCustomBankName(editingDraft.customTransferAccount.bankName);
-        setCustomAccountNo(editingDraft.customTransferAccount.accountNo);
-        setCustomAccountName(editingDraft.customTransferAccount.accountName);
+        setCustomBankName(editingDraft.customTransferAccount.bankName || "");
+        setCustomAccountNo(editingDraft.customTransferAccount.accountNo || "");
+        setCustomAccountName(editingDraft.customTransferAccount.accountName || "");
       }
       if (editingDraft.advId) {
         setGeneratedAdvId(editingDraft.advId);
@@ -509,45 +510,52 @@ export default function AdvanceRequestForm({ currentEmployee, onSuccess, editing
         }
 
         const reader = new FileReader();
-        reader.onloadend = () => {
+        reader.onloadend = async () => {
           if (typeof reader.result === "string") {
             const resultStr = reader.result;
             
-            if (file.type.startsWith("image/")) {
-              const img = document.createElement("img");
-              img.onload = () => {
-                const canvas = document.createElement("canvas");
-                const MAX_WIDTH = 800;
-                const MAX_HEIGHT = 800;
-                let width = img.width;
-                let height = img.height;
+            try {
+              let finalBase64 = resultStr;
+              if (file.type.startsWith("image/")) {
+                finalBase64 = await new Promise<string>((resolve) => {
+                  const img = document.createElement("img");
+                  img.onload = () => {
+                    const canvas = document.createElement("canvas");
+                    const MAX_WIDTH = 1200; // Increased quality
+                    const MAX_HEIGHT = 1200;
+                    let width = img.width;
+                    let height = img.height;
 
-                if (width > height) {
-                  if (width > MAX_WIDTH) {
-                    height *= MAX_WIDTH / width;
-                    width = MAX_WIDTH;
-                  }
-                } else {
-                  if (height > MAX_HEIGHT) {
-                    width *= MAX_HEIGHT / height;
-                    height = MAX_HEIGHT;
-                  }
-                }
+                    if (width > height) {
+                      if (width > MAX_WIDTH) {
+                        height *= MAX_WIDTH / width;
+                        width = MAX_WIDTH;
+                      }
+                    } else {
+                      if (height > MAX_HEIGHT) {
+                        width *= MAX_HEIGHT / height;
+                        height = MAX_HEIGHT;
+                      }
+                    }
 
-                canvas.width = width;
-                canvas.height = height;
-                const ctx = canvas.getContext("2d");
-                ctx?.drawImage(img, 0, 0, width, height);
-                const compressedBase64 = canvas.toDataURL("image/jpeg", 0.7);
-                setAttachments(prev => [...prev, { url: compressedBase64, name: file.name, type: file.type }]);
-              };
-              img.src = resultStr;
-            } else {
-              if (file.size > 500 * 1024) {
-                setError(`ไฟล์ PDF ${file.name} ใหญ่เกินไป (จำกัด 500KB)`);
-                return;
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext("2d");
+                    ctx?.drawImage(img, 0, 0, width, height);
+                    resolve(canvas.toDataURL("image/jpeg", 0.8));
+                  };
+                  img.src = resultStr;
+                });
               }
-              setAttachments(prev => [...prev, { url: resultStr, name: file.name, type: file.type }]);
+
+              // Upload immediately to get a real URL
+              const storagePath = `attachments/${currentEmployee.id}/${Date.now()}_${file.name}`;
+              const realUrl = await uploadBase64(finalBase64, storagePath, file.type);
+              
+              setAttachments(prev => [...prev, { url: realUrl, name: file.name, type: file.type }]);
+            } catch (uploadErr) {
+              console.error("Upload failed in AdvanceRequestForm:", uploadErr);
+              setError(`ไม่สามารถอัปโหลดไฟล์ ${file.name} ได้`);
             }
           }
         };

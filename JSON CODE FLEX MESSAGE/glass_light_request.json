@@ -1,0 +1,326 @@
+{
+  "type": "bubble",
+  "size": "mega",
+  "header": {
+    "type": "box",
+    "layout": "vertical",
+    "backgroundColor": "#00A5E0",
+    "paddingAll": "16px",
+    "contents": [
+      {
+        "type": "text",
+        "text": "{advId}",
+        "weight": "bold",
+        "size": "xl",
+        "color": "#FFFFFF",
+        "align": "center"
+      },
+      {
+        "type": "text",
+        "text": "{employeeName}",
+        "size": "lg",
+        "color": "#FFFFFF",
+        "align": "center",
+        "margin": "sm"
+      }
+    ]
+  },
+  "body": {
+    "type": "box",
+    "layout": "vertical",
+    "backgroundColor": "#FFFFFF",
+    "spacing": "sm",
+    "contents": [
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "spacing": "md",
+        "contents": [
+          {
+            "type": "box",
+            "layout": "vertical",
+            "width": "74px",
+            "spacing": "sm",
+            "contents": [
+              {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#32CBFF",
+                "cornerRadius": "16px",
+                "paddingAll": "8px",
+                "contents": [
+                  {
+                    "type": "text",
+                    "text": "คงค้าง",
+                    "size": "xs",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  },
+                  {
+                    "type": "text",
+                    "text": "{outstandingShort}",
+                    "weight": "bold",
+                    "size": "md",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  }
+                ]
+              },
+              {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#89A1EF",
+                "cornerRadius": "16px",
+                "paddingAll": "8px",
+                "contents": [
+                  {
+                    "type": "text",
+                    "text": "สะสม",
+                    "size": "xs",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  },
+                  {
+                    "type": "text",
+                    "text": "{totalAdvanceShort}",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  }
+                ]
+              },
+              {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#EF9CDA",
+                "cornerRadius": "16px",
+                "paddingAll": "8px",
+                "contents": [
+                  {
+                    "type": "text",
+                    "text": "ปิดแล้ว",
+                    "size": "xs",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  },
+                  {
+                    "type": "text",
+                    "text": "{closedAmountShort}",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#FFFFFF",
+            "cornerRadius": "22px",
+            "height": "170px",
+            "flex": 1,
+            "contents": [
+              {
+                "type": "image",
+                "url": "{profileImageUrl}",
+                "size": "full",
+                "aspectMode": "cover",
+                "aspectRatio": "1:1"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "separator",
+        "margin": "lg",
+        "color": "#E6D7F4"
+      },
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "contents": [
+          {
+            "type": "text",
+            "text": "โครงการ",
+            "size": "sm",
+            "color": "#9A8477",
+            "flex": 3
+          },
+          {
+            "type": "text",
+            "text": "{projectName}",
+            "size": "sm",
+            "color": "#24324A",
+            "weight": "bold",
+            "flex": 7,
+            "align": "end",
+            "wrap": true
+          }
+        ]
+      },
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "contents": [
+          {
+            "type": "text",
+            "text": "ประเภท",
+            "size": "sm",
+            "color": "#9A8477",
+            "flex": 3
+          },
+          {
+            "type": "text",
+            "text": "{category}",
+            "size": "sm",
+            "color": "#24324A",
+            "weight": "bold",
+            "flex": 7,
+            "align": "end",
+            "wrap": true
+          }
+        ]
+      },
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "contents": [
+          {
+            "type": "text",
+            "text": "วันที่ขอเบิก",
+            "size": "sm",
+            "color": "#9A8477",
+            "flex": 3
+          },
+          {
+            "type": "text",
+            "text": "{date}",
+            "size": "sm",
+            "color": "#24324A",
+            "weight": "bold",
+            "flex": 7,
+            "align": "end",
+            "wrap": true
+          }
+        ]
+      },
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "contents": [
+          {
+            "type": "text",
+            "text": "กำหนดเคลียร์",
+            "size": "sm",
+            "color": "#9A8477",
+            "flex": 3
+          },
+          {
+            "type": "text",
+            "text": "{neededDate}",
+            "size": "sm",
+            "color": "#24324A",
+            "weight": "bold",
+            "flex": 7,
+            "align": "end",
+            "wrap": true
+          }
+        ]
+      },
+      {
+        "type": "separator",
+        "margin": "lg",
+        "color": "#E6D7F4"
+      },
+      {
+        "type": "text",
+        "text": "เหตุผลการเบิก",
+        "weight": "bold",
+        "size": "sm",
+        "color": "#24324A"
+      },
+      {
+        "type": "text",
+        "text": "{remark}",
+        "wrap": true,
+        "size": "sm",
+        "color": "#6B6F8B"
+      },
+      {
+        "type": "box",
+        "layout": "vertical",
+        "backgroundColor": "#FFFFFF",
+        "cornerRadius": "18px",
+        "paddingAll": "xs",
+        "margin": "xs",
+        "spacing": "sm",
+        "contents": [
+          {
+            "type": "text",
+            "text": "{amount}",
+            "size": "xl",
+            "weight": "bold",
+            "color": "#000000",
+            "align": "center"
+          },
+          {
+            "type": "text",
+            "text": "จำนวนเงินที่ขอเบิก",
+            "size": "xs",
+            "color": "#989898",
+            "align": "center",
+            "margin": "sm"
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "type": "box",
+    "layout": "horizontal",
+    "spacing": "xs",
+    "paddingAll": "none",
+    "backgroundColor": "#FECEF1",
+    "paddingBottom": "xl",
+    "paddingStart": "xl",
+    "paddingEnd": "xl",
+    "contents": [
+      {
+        "type": "button",
+        "style": "primary",
+        "color": "#00A5E0",
+        "action": {
+          "type": "postback",
+          "label": "อนุมัติ",
+          "data": "action=approve&id={advId}"
+        }
+      },
+      {
+        "type": "button",
+        "style": "primary",
+        "color": "#EF9CDA",
+        "action": {
+          "type": "postback",
+          "label": "ไม่อนุมัติ",
+          "data": "action=reject&id={advId}"
+        }
+      }
+    ]
+  },
+  "styles": {
+    "header": {
+      "backgroundColor": "#00A5E0"
+    },
+    "body": {
+      "backgroundColor": "#FECEF1"
+    },
+    "footer": {
+      "backgroundColor": "#FECEF1"
+    }
+  }
+}

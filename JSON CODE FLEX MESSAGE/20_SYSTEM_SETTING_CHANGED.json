@@ -1,0 +1,246 @@
+{
+  "type": "flex",
+  "altText": "มีการเปลี่ยนแปลงการตั้งค่าระบบ - {settingTopic}",
+  "contents": {
+    "type": "bubble",
+    "size": "mega",
+    "styles": {
+      "body": {
+        "backgroundColor": "#F6F8FA"
+      },
+      "footer": {
+        "backgroundColor": "#F6F8FA"
+      }
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "paddingAll": "20px",
+      "spacing": "md",
+      "contents": [
+        {
+          "type": "box",
+          "layout": "horizontal",
+          "contents": [
+            {
+              "type": "box",
+              "layout": "vertical",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "ADVANCE PRO",
+                  "size": "xs",
+                  "color": "#94A3B8",
+                  "wrap": true,
+                  "weight": "bold"
+                },
+                {
+                  "type": "text",
+                  "text": "มีการเปลี่ยนแปลงการตั้งค่าระบบ",
+                  "size": "lg",
+                  "color": "#1F2937",
+                  "wrap": true,
+                  "weight": "bold",
+                  "margin": "xs"
+                }
+              ],
+              "flex": 8
+            },
+            {
+              "type": "box",
+              "layout": "vertical",
+              "contents": [
+                {
+                  "type": "box",
+                  "layout": "vertical",
+                  "backgroundColor": "#F5F3FF",
+                  "cornerRadius": "999px",
+                  "paddingTop": "5px",
+                  "paddingBottom": "5px",
+                  "paddingStart": "10px",
+                  "paddingEnd": "10px",
+                  "contents": [
+                    {
+                      "type": "text",
+                      "text": "Settings",
+                      "size": "xs",
+                      "color": "#7C3AED",
+                      "wrap": true,
+                      "weight": "bold",
+                      "align": "center"
+                    }
+                  ]
+                }
+              ],
+              "flex": 4,
+              "alignItems": "flex-end"
+            }
+          ]
+        },
+        {
+          "type": "separator",
+          "margin": "lg",
+          "color": "#DDE7E6"
+        },
+        {
+          "type": "box",
+          "layout": "horizontal",
+          "margin": "lg",
+          "contents": [
+            {
+              "type": "text",
+              "text": "หัวข้อ",
+              "size": "xs",
+              "color": "#64748B",
+              "wrap": true,
+              "flex": 4
+            },
+            {
+              "type": "text",
+              "text": "{settingTopic}",
+              "size": "md",
+              "color": "#4E958D",
+              "wrap": true,
+              "weight": "bold",
+              "align": "end",
+              "flex": 8
+            }
+          ]
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#FFFFFF",
+          "cornerRadius": "20px",
+          "borderColor": "#E5E7EB",
+          "borderWidth": "1px",
+          "paddingAll": "16px",
+          "spacing": "xs",
+          "contents": [
+            {
+              "type": "text",
+              "text": "รายละเอียด",
+              "size": "xs",
+              "color": "#4E958D",
+              "wrap": true,
+              "weight": "bold"
+            },
+            {
+              "type": "separator",
+              "margin": "sm",
+              "color": "#EEF2F7"
+            },
+            {
+              "type": "box",
+              "layout": "horizontal",
+              "spacing": "md",
+              "margin": "sm",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "ผู้ทำรายการ",
+                  "size": "xs",
+                  "color": "#64748B",
+                  "wrap": true,
+                  "flex": 5
+                },
+                {
+                  "type": "text",
+                  "text": "{actorName}",
+                  "size": "sm",
+                  "color": "#1F2937",
+                  "wrap": true,
+                  "weight": "bold",
+                  "align": "end",
+                  "flex": 7
+                }
+              ]
+            },
+            {
+              "type": "box",
+              "layout": "horizontal",
+              "spacing": "md",
+              "margin": "sm",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "ช่องทาง",
+                  "size": "xs",
+                  "color": "#64748B",
+                  "wrap": true,
+                  "flex": 5
+                },
+                {
+                  "type": "text",
+                  "text": "{channel}",
+                  "size": "sm",
+                  "color": "#1F2937",
+                  "wrap": true,
+                  "weight": "bold",
+                  "align": "end",
+                  "flex": 7
+                }
+              ]
+            },
+            {
+              "type": "box",
+              "layout": "horizontal",
+              "spacing": "md",
+              "margin": "sm",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "เวลา",
+                  "size": "xs",
+                  "color": "#64748B",
+                  "wrap": true,
+                  "flex": 5
+                },
+                {
+                  "type": "text",
+                  "text": "{changedAt}",
+                  "size": "sm",
+                  "color": "#1F2937",
+                  "wrap": true,
+                  "weight": "bold",
+                  "align": "end",
+                  "flex": 7
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "footer": {
+      "type": "box",
+      "layout": "vertical",
+      "paddingAll": "16px",
+      "spacing": "sm",
+      "contents": [
+        {
+          "type": "button",
+          "height": "sm",
+          "style": "primary",
+          "action": {
+            "type": "uri",
+            "label": "ดู Audit Log",
+            "uri": "{auditLogUrl}"
+          },
+          "color": "#4E958D"
+        },
+        {
+          "type": "button",
+          "height": "sm",
+          "style": "secondary",
+          "action": {
+            "type": "uri",
+            "label": "เปิด Settings",
+            "uri": "{settingsUrl}"
+          },
+          "color": "#E5E7EB"
+        }
+      ]
+    }
+  }
+}

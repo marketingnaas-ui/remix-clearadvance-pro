@@ -1,0 +1,263 @@
+{
+  "type": "flex",
+  "altText": "Apple Pay - Payment Success",
+  "contents": {
+    "type": "bubble",
+    "size": "mega",
+    "styles": {
+      "body": {
+        "backgroundColor": "#090A0F"
+      }
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "position": "relative",
+      "paddingAll": "0px",
+      "contents": [
+        {
+          "type": "box",
+          "layout": "vertical",
+          "position": "absolute",
+          "width": "100%",
+          "height": "100%",
+          "background": {
+            "type": "linearGradient",
+            "angle": "145deg",
+            "startColor": "#0F1016",
+            "endColor": "#1A1D29"
+          }
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "position": "absolute",
+          "width": "220px",
+          "height": "220px",
+          "cornerRadius": "110px",
+          "offsetTop": "-60px",
+          "offsetStart": "-60px",
+          "background": {
+            "type": "linearGradient",
+            "angle": "0deg",
+            "startColor": "#FF2D5522",
+            "endColor": "#9F123988"
+          }
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "position": "absolute",
+          "width": "260px",
+          "height": "260px",
+          "cornerRadius": "130px",
+          "offsetBottom": "-80px",
+          "offsetEnd": "-80px",
+          "background": {
+            "type": "linearGradient",
+            "angle": "0deg",
+            "startColor": "#007AFF22",
+            "endColor": "#1E3A8A88"
+          }
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "paddingAll": "24px",
+          "spacing": "xl",
+          "contents": [
+            {
+              "type": "box",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": " Pay",
+                  "color": "#FFFFFF",
+                  "weight": "bold",
+                  "size": "lg",
+                  "flex": 1
+                },
+                {
+                  "type": "box",
+                  "layout": "vertical",
+                  "backgroundColor": "#FFFFFF1A",
+                  "cornerRadius": "12px",
+                  "paddingTop": "4px",
+                  "paddingBottom": "4px",
+                  "paddingStart": "10px",
+                  "paddingEnd": "10px",
+                  "contents": [
+                    {
+                      "type": "text",
+                      "text": "APPROVED",
+                      "color": "#34D399",
+                      "size": "xxs",
+                      "weight": "bold",
+                      "align": "center"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "box",
+              "layout": "vertical",
+              "backgroundColor": "#FFFFFF0A",
+              "borderColor": "#FFFFFF1F",
+              "borderWidth": "1px",
+              "cornerRadius": "24px",
+              "paddingAll": "20px",
+              "spacing": "lg",
+              "contents": [
+                {
+                  "type": "box",
+                  "layout": "vertical",
+                  "spacing": "xs",
+                  "contents": [
+                    {
+                      "type": "text",
+                      "text": "Transaction Total",
+                      "color": "#FFFFFF80",
+                      "size": "xs",
+                      "align": "center"
+                    },
+                    {
+                      "type": "text",
+                      "text": "฿ 45,900.00",
+                      "color": "#FFFFFF",
+                      "size": "xxl",
+                      "weight": "bold",
+                      "align": "center"
+                    }
+                  ]
+                },
+                {
+                  "type": "separator",
+                  "color": "#FFFFFF1A"
+                },
+                {
+                  "type": "box",
+                  "layout": "vertical",
+                  "spacing": "md",
+                  "contents": [
+                    {
+                      "type": "box",
+                      "layout": "horizontal",
+                      "contents": [
+                        {
+                          "type": "text",
+                          "text": "Merchant",
+                          "color": "#FFFFFF80",
+                          "size": "xs"
+                        },
+                        {
+                          "type": "text",
+                          "text": "Apple Store Iconsiam",
+                          "color": "#FFFFFF",
+                          "size": "xs",
+                          "weight": "bold",
+                          "align": "end"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "box",
+                      "layout": "horizontal",
+                      "contents": [
+                        {
+                          "type": "text",
+                          "text": "Item",
+                          "color": "#FFFFFF80",
+                          "size": "xs"
+                        },
+                        {
+                          "type": "text",
+                          "text": "iPhone 17 Pro Max",
+                          "color": "#FFFFFF",
+                          "size": "xs",
+                          "weight": "bold",
+                          "align": "end"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "box",
+                      "layout": "horizontal",
+                      "contents": [
+                        {
+                          "type": "text",
+                          "text": "Reference No.",
+                          "color": "#FFFFFF80",
+                          "size": "xs"
+                        },
+                        {
+                          "type": "text",
+                          "text": "TXN-9823018",
+                          "color": "#FFFFFF",
+                          "size": "xs",
+                          "weight": "bold",
+                          "align": "end"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "box",
+                      "layout": "horizontal",
+                      "contents": [
+                        {
+                          "type": "text",
+                          "text": "Method",
+                          "color": "#FFFFFF80",
+                          "size": "xs"
+                        },
+                        {
+                          "type": "text",
+                          "text": "Visa Debit (•••• 4920)",
+                          "color": "#FFFFFF",
+                          "size": "xs",
+                          "weight": "bold",
+                          "align": "end"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "box",
+              "layout": "vertical",
+              "spacing": "sm",
+              "contents": [
+                {
+                  "type": "button",
+                  "height": "sm",
+                  "style": "primary",
+                  "color": "#FFFFFF",
+                  "action": {
+                    "type": "uri",
+                    "label": "View Digital Receipt",
+                    "uri": "https://www.apple.com/th/"
+                  }
+                },
+                {
+                  "type": "button",
+                  "height": "sm",
+                  "style": "link",
+                  "color": "#FFFFFF",
+                  "action": {
+                    "type": "uri",
+                    "label": "Back to Home",
+                    "uri": "https://www.apple.com/th/"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

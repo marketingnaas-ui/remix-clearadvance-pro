@@ -12,12 +12,13 @@ import {
   setDoc, 
   updateDoc, 
   getDoc,
-  deleteDoc 
+  deleteDoc,
+  writeBatch
 } from "firebase/firestore";
 import { db, hashPIN } from "../lib/firebase";
 import { exportToExcel } from "../lib/excelExport";
 import * as XLSX from "xlsx";
-import { Employee, UserRole, AuditLog, ActionType, AISettings, AIUsageLog } from "../types";
+import { Employee, UserRole, AuditLog, ActionType, AISettings, AIUsageLog, LineTrigger } from "../types";
 import { DocumentFormats, DEFAULT_DOCUMENT_FORMATS, generateFormattedId, saveDocumentFormats } from "../lib/idGenerator";
 import {
   GoogleWorkspaceSettings,
@@ -41,6 +42,9 @@ import {
   Plus, 
   Trash2, 
   AlertCircle,
+  UserPlus,
+  Loader2,
+  Send,
   RefreshCw,
   Grid,
   List,
@@ -48,8 +52,10 @@ import {
   Sparkles,
   BookOpen,
   Settings,
+  AlertTriangle,
   Upload,
   Eye,
+  Copy,
   HelpCircle,
   FileSpreadsheet,
   PlusCircle,
@@ -68,26 +74,15 @@ import {
 import AILoadingModal from "./AILoadingModal";
 import EmployeeManagement from "./master-data/EmployeeManagement";
 import ProjectManagement from "./master-data/ProjectManagement";
-import ProjectCostSummary from "./master-data/ProjectCostSummary";
 import AdvanceManagement from "./master-data/AdvanceManagement";
 import ClearingHistory from "./master-data/ClearingHistory";
 import ExpenseItems from "./master-data/ExpenseItems";
 import DataCollectionManager from "./DataCollectionManager";
 import { COLLECTION_SCHEMAS } from "../lib/collectionSchemas";
+import LiffActionLogs from "./LiffActionLogs";
 
 interface AdminSettingsProps {
   currentEmployee: Employee;
-}
-
-export interface LineMessageTrigger {
-  id: string;
-  name: string;
-  isActive: boolean;
-  messageTemplate: string;
-  type?: "text" | "flex";
-  altText?: string;
-  recipientMode?: "approvers" | "requester" | "accounting" | "all" | "target";
-  recipientRoles?: UserRole[];
 }
 
 interface ApprovalConditionRule {
@@ -96,6 +91,12 @@ interface ApprovalConditionRule {
   minAmount: number;
   maxAmount: number;
   approverRoles: UserRole[];
+  approverRoleIds?: string[];
+  approverPositionIds?: string[];
+  projectScope?: "all_projects" | "specific_projects";
+  documentType?: "ADVANCE" | "CLEARING" | "BOTH";
+  allowLineLiffApproval?: boolean;
+  canApproveOwnRequest?: boolean;
   isActive: boolean;
 }
 
@@ -232,16 +233,16 @@ const reportFlex = (title: string, summaryVar: string) => ({
   body: { type: "box", layout: "vertical", spacing: "sm", contents: [infoRow("ช่วงวันที่", "{dateRange}"), infoRow("คงค้าง", "{outstandingAmount}"), infoRow("รออนุมัติ", "{waitingApprovalCount} รายการ"), infoRow("รอเคลียร์", "{waitingClearanceCount} รายการ"), { type: "separator", margin: "md" }, { type: "text", text: summaryVar, wrap: true, size: "xs", color: "#2E2E2E", margin: "md" }] },
 });
 
-const buildSystemLineTriggers = (): LineMessageTrigger[] => [
-  { id: "onNewRequest", name: "ขออนุมัติรายการเบิกใหม่", isActive: true, type: "flex", altText: "มีรายการขออนุมัติใหม่ {advId}", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ADMIN], messageTemplate: stringifyFlex(approvalRequestFlex()) },
-  { id: "onManagerApproval", name: "อนุมัติแล้ว ส่งให้บัญชี/ผู้ขอเบิก", isActive: true, type: "flex", altText: "รายการ {advId} อนุมัติแล้ว", recipientMode: "accounting", recipientRoles: [UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("อนุมัติรายการแล้ว", "รายการ {advId} ได้รับอนุมัติแล้ว รอขั้นตอนบัญชีและโอนเงิน")) },
-  { id: "onReject", name: "ไม่อนุมัติรายการ", isActive: true, type: "flex", altText: "ไม่อนุมัติรายการ {advId}", recipientMode: "requester", messageTemplate: stringifyFlex(rejectFlex()) },
-  { id: "onTransferReady", name: "แจ้งแนบสลิปผ่าน LIFF", isActive: true, type: "flex", altText: "แนบสลิปโอนเงิน {advId}", recipientMode: "requester", messageTemplate: stringifyFlex(slipLiffFlex()) },
-  { id: "onClearanceSubmitted", name: "ส่งเอกสารเคลียร์ยอดแล้ว", isActive: true, type: "flex", altText: "ส่งเคลียร์ยอด {advId}", recipientMode: "accounting", recipientRoles: [UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("ส่งเคลียร์ยอดแล้ว", "รายการ {advId} ส่งเอกสารเคลียร์ยอดแล้ว ยอดส่งเคลียร์ {clearingAmount}")) },
-  { id: "onSettlement", name: "ปิดยอด Settlement", isActive: true, type: "flex", altText: "ปิดยอด {advId}", recipientMode: "requester", messageTemplate: stringifyFlex(reportFlex("ปิดยอดเรียบร้อย", "รายการ {advId} ปิดยอดแล้ว ผลต่างสุทธิ {settlementAmount}")) },
-  { id: "dailyReport", name: "รายงานประจำวัน", isActive: true, type: "flex", altText: "รายงานประจำวัน ClearAdvance", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("รายงานประจำวัน", "{dailySummary}")) },
-  { id: "weeklyReport", name: "รายงานประจำสัปดาห์", isActive: true, type: "flex", altText: "รายงานประจำสัปดาห์ ClearAdvance", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("รายงานประจำสัปดาห์", "{weeklySummary}")) },
-  { id: "outstandingReport", name: "รายการคงค้าง / Quick Reply", isActive: true, type: "flex", altText: "รายการคงค้าง ClearAdvance", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex({ contents: reportFlex("รายการคงค้าง", "{outstandingSummary}"), quickReply: { items: [{ type: "action", action: { type: "postback", label: "รายงานวันนี้", data: "report=daily" } }, { type: "action", action: { type: "postback", label: "รายงานสัปดาห์", data: "report=weekly" } }, { type: "action", action: { type: "postback", label: "คงค้าง", data: "report=outstanding" } }] } }) },
+const buildSystemLineTriggers = (): LineTrigger[] => [
+  { id: "onNewRequest", name: "ขออนุมัติรายการเบิกใหม่", isActive: true, type: "flex", altText: "มีรายการขออนุมัติใหม่ {advId}", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ADMIN], messageTemplate: stringifyFlex(approvalRequestFlex()), sendToGroup: true, sendToUsers: true, alsoSendToRequester: false, useApprovalWorkflowRules: true, includeLiffActions: true, liffActionMode: "approveReject" },
+  { id: "onManagerApproval", name: "อนุมัติแล้ว ส่งให้บัญชี/ผู้ขอเบิก", isActive: true, type: "flex", altText: "รายการ {advId} อนุมัติแล้ว", recipientMode: "accounting", recipientRoles: [UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("อนุมัติรายการแล้ว", "รายการ {advId} ได้รับอนุมัติแล้ว รอขั้นตอนบัญชีและโอนเงิน")), sendToGroup: false, sendToUsers: true, alsoSendToRequester: true, useApprovalWorkflowRules: false, includeLiffActions: true, liffActionMode: "viewOnly" },
+  { id: "onReject", name: "ไม่อนุมัติรายการ", isActive: true, type: "flex", altText: "ไม่อนุมัติรายการ {advId}", recipientMode: "requester", messageTemplate: stringifyFlex(rejectFlex()), sendToGroup: false, sendToUsers: true, alsoSendToRequester: true, useApprovalWorkflowRules: false, includeLiffActions: true, liffActionMode: "viewOnly" },
+  { id: "onTransferReady", name: "แจ้งแนบสลิปผ่าน LIFF", isActive: true, type: "flex", altText: "แนบสลิปโอนเงิน {advId}", recipientMode: "requester", messageTemplate: stringifyFlex(slipLiffFlex()), sendToGroup: false, sendToUsers: true, alsoSendToRequester: true, useApprovalWorkflowRules: false, includeLiffActions: true, liffActionMode: "uploadSlip" },
+  { id: "onClearanceSubmitted", name: "ส่งเอกสารเคลียร์ยอดแล้ว", isActive: true, type: "flex", altText: "ส่งเคลียร์ยอด {advId}", recipientMode: "accounting", recipientRoles: [UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("ส่งเคลียร์ยอดแล้ว", "รายการ {advId} ส่งเอกสารเคลียร์ยอดแล้ว ยอดส่งเคลียร์ {clearingAmount}")), sendToGroup: false, sendToUsers: true, alsoSendToRequester: false, useApprovalWorkflowRules: false, includeLiffActions: true, liffActionMode: "viewOnly" },
+  { id: "onSettlement", name: "ปิดยอด Settlement", isActive: true, type: "flex", altText: "ปิดยอด {advId}", recipientMode: "requester", messageTemplate: stringifyFlex(reportFlex("ปิดยอดเรียบร้อย", "รายการ {advId} ปิดยอดแล้ว ผลต่างสุทธิ {settlementAmount}")), sendToGroup: false, sendToUsers: true, alsoSendToRequester: true, useApprovalWorkflowRules: false, includeLiffActions: true, liffActionMode: "viewOnly" },
+  { id: "dailyReport", name: "รายงานประจำวัน", isActive: true, type: "flex", altText: "รายงานประจำวัน ClearAdvance", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("รายงานประจำวัน", "{dailySummary}")), sendToGroup: true, sendToUsers: true, alsoSendToRequester: false, useApprovalWorkflowRules: false, includeLiffActions: false, liffActionMode: "none" },
+  { id: "weeklyReport", name: "รายงานประจำสัปดาห์", isActive: true, type: "flex", altText: "รายงานประจำสัปดาห์ ClearAdvance", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex(reportFlex("รายงานประจำสัปดาห์", "{weeklySummary}")), sendToGroup: true, sendToUsers: true, alsoSendToRequester: false, useApprovalWorkflowRules: false, includeLiffActions: false, liffActionMode: "none" },
+  { id: "outstandingReport", name: "รายการคงค้าง / Quick Reply", isActive: true, type: "flex", altText: "รายการคงค้าง ClearAdvance", recipientMode: "approvers", recipientRoles: [UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN], messageTemplate: stringifyFlex({ contents: reportFlex("รายการคงค้าง", "{outstandingSummary}"), quickReply: { items: [{ type: "action", action: { type: "postback", label: "รายงานวันนี้", data: "report=daily" } }, { type: "action", action: { type: "postback", label: "รายงานสัปดาห์", data: "report=weekly" } }, { type: "action", action: { type: "postback", label: "คงค้าง", data: "report=outstanding" } }] } }), sendToGroup: false, sendToUsers: true, alsoSendToRequester: false, useApprovalWorkflowRules: false, includeLiffActions: false, liffActionMode: "none" },
 ];
 
 type AdminSubTab =
@@ -262,7 +263,8 @@ type AdminSubTab =
 
 export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   const [activeSubTab, setActiveSubTab] = useState<AdminSubTab>("users");
-  const [activeMasterDataTab, setActiveMasterDataTab] = useState<"employees" | "projects" | "project_costs" | "advances" | "clearing" | "expenses" | "collections">("employees");
+  const [employeeSubTab, setEmployeeSubTab] = useState<"directory" | "positions">("directory");
+  const [activeMasterDataTab, setActiveMasterDataTab] = useState<"employees" | "projects" | "advances" | "clearing" | "expenses" | "collections" | "positions" | "categories">("projects");
   const [activeCollectionName, setActiveCollectionName] = useState(COLLECTION_SCHEMAS[0]?.collection || "employees");
   const [workspaceSettings, setWorkspaceSettings] = useState<GoogleWorkspaceSettings>({});
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -271,6 +273,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
+  const [positions, setPositions] = useState<string[]>([]);
   const [categoryDetails, setCategoryDetails] = useState<{ [catName: string]: { categoryId: string } }>({});
   const [loading, setLoading] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
@@ -288,6 +291,8 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   const [editingProjectIndex, setEditingProjectIndex] = useState<number | null>(null);
   const [editingProjectText, setEditingProjectText] = useState("");
   const [projectDialog, setProjectDialog] = useState<{ isOpen: boolean; proj: string; details: any } | null>(null);
+  const [categoryToDelete, setCategoryToDelete] = useState<string | null>(null);
+  const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
 
   // AI & Budget config fields
   const [steelPriceUrl, setSteelPriceUrl] = useState("https://www.depthai.go.th");
@@ -298,6 +303,13 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   const [selectedAiOcrModel, setSelectedAiOcrModel] = useState<string>("gemini-3.5-flash");
   const [aiUsageLogs, setAiUsageLogs] = useState<AIUsageLog[]>([]);
   const [dbStats, setDbStats] = useState<{ [coll: string]: number }>({});
+
+  // Production Reset States
+  const [resetting, setResetting] = useState(false);
+  const [resetSuccess, setResetSuccess] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetConfirmWord, setResetConfirmWord] = useState("");
+  const [showResetModal, setShowResetModal] = useState(false);
 
   const GEMINI_MODELS = [
     { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash", rpm: "15 / 1K", tpm: "2M / 4M", rpd: "10K / 50K", description: "รุ่นมาตรฐานสำหรับงานทั่วไป รวดเร็ว ประหยัด และมีประสิทธิภาพสูงสุด" },
@@ -425,12 +437,37 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   const [lineChannelAccessToken, setLineChannelAccessToken] = useState("");
   const [lineChannelSecret, setLineChannelSecret] = useState("");
   const [lineLiffId, setLineLiffId] = useState("");
+  const [lineAppBaseUrl, setLineAppBaseUrl] = useState("");
+  const [activeQrUrl, setActiveQrUrl] = useState<string | null>(null);
+  const [activeQrLabel, setActiveQrLabel] = useState<string | null>(null);
   const [lineGroupId, setLineGroupId] = useState("");
-  const [lineTriggers, setLineTriggers] = useState<LineMessageTrigger[]>(buildSystemLineTriggers());
+  const [lineGroupName, setLineGroupName] = useState("");
+  const [lineEnableGroupNotification, setLineEnableGroupNotification] = useState(false);
+  const [lineDailyReportEnabled, setLineDailyReportEnabled] = useState(false);
+  const [lineDailyReportTime, setLineDailyReportTime] = useState("");
+  const [lineWeeklyReportEnabled, setLineWeeklyReportEnabled] = useState(false);
+  const [lineWeeklyReportDay, setLineWeeklyReportDay] = useState("");
+  const [lineWeeklyReportTime, setLineWeeklyReportTime] = useState("");
+  const [lineTriggers, setLineTriggers] = useState<LineTrigger[]>(buildSystemLineTriggers());
+  const [revealSecrets, setRevealSecrets] = useState(false);
+  const [showSyncWarning, setShowSyncWarning] = useState(false);
+  const [oldLiffId, setOldLiffId] = useState("");
   const [previewTriggerId, setPreviewTriggerId] = useState<string>("onNewRequest");
   const [newLineTriggerName, setNewLineTriggerName] = useState("");
   const [newLineTriggerTemplate, setNewLineTriggerTemplate] = useState("");
   const [newLineTriggerType, setNewLineTriggerType] = useState<"text" | "flex">("text");
+
+  // State variables for LINE LIFF preview interactive mockup
+  const [phoneViewMode, setPhoneViewMode] = useState<"chat" | "liff_action" | "liff_slip">("chat");
+  const [mockLiffActionState, setMockLiffActionState] = useState<"pending" | "approved" | "rejected">("pending");
+  const [mockLiffSlipState, setMockLiffSlipState] = useState<"pending" | "uploaded" | "success">("pending");
+  const [mockLiffActionType, setMockLiffActionType] = useState<"advance" | "clearance">("advance");
+
+  // State variables for LINE account linking invitation dispatcher
+  const [selectedUnlinkedEmpIds, setSelectedUnlinkedEmpIds] = useState<string[]>([]);
+  const [sendingInvitations, setSendingInvitations] = useState(false);
+  const [invitationSuccess, setInvitationSuccess] = useState<string | null>(null);
+  const [invitationError, setInvitationError] = useState<string | null>(null);
 
   // AI Settings File Import states
   const [importing, setImporting] = useState(false);
@@ -450,6 +487,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   const [editEmpNickname, setEditEmpNickname] = useState("");
   const [editEmpPin, setEditEmpPin] = useState("");
   const [editEmpRole, setEditEmpRole] = useState<UserRole>(UserRole.EMPLOYEE);
+  const [editEmpPosition, setEditEmpPosition] = useState("");
   const [editEmpBankName, setEditEmpBankName] = useState("");
   const [editEmpBankNo, setEditEmpBankNo] = useState("");
   const [editEmpBankAccountName, setEditEmpBankAccountName] = useState("");
@@ -480,6 +518,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
     setEditEmpNickname(emp.nickname || "");
     setEditEmpPin(emp.plainPin || "");
     setEditEmpRole(emp.role);
+    setEditEmpPosition(emp.positionId || emp.position || "");
     setEditEmpBankName(emp.bankName || "");
     setEditEmpBankNo(emp.bankNo || "");
     setEditEmpBankAccountName(emp.bankAccountName || "");
@@ -547,6 +586,9 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
         pinHash: pinHash,
         plainPin: editEmpPin,
         role: editEmpRole,
+        positionId: editEmpPosition,
+        position: editEmpPosition,
+        positionName: editEmpPosition,
         bankName: editEmpBankName.trim(),
         bankNo: editEmpBankNo.trim(),
         bankAccountName: editEmpBankAccountName.trim(),
@@ -595,6 +637,14 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
         const data = settingsSnap.data();
         setProjects(data.projects || []);
         setCategories(data.categories || []);
+        setPositions(data.positions || [
+          "กรรมการผู้จัดการ",
+          "ผู้บริหาร",
+          "ผู้จัดการโครงการ",
+          "ฝ่ายบัญชีและการเงิน",
+          "โฟร์แมน",
+          "พนักงาน"
+        ]);
         
         // Load AI Config
         if (data.aiConfig) {
@@ -628,9 +678,26 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
           setLineChannelAccessToken(data.lineMessagingConfig.channelAccessToken || "");
           setLineChannelSecret(data.lineMessagingConfig.channelSecret || "");
           setLineLiffId(data.lineMessagingConfig.liffId || "");
+          setLineAppBaseUrl(data.lineMessagingConfig.appBaseUrl || window.location.origin);
           setLineGroupId(data.lineMessagingConfig.groupId || data.lineMessagingConfig.lineGroupId || "");
+          setLineGroupName(data.lineMessagingConfig.groupName || "");
+          setLineEnableGroupNotification(!!data.lineMessagingConfig.enableGroupNotification);
+          setLineDailyReportEnabled(!!data.lineMessagingConfig.dailyReportEnabled);
+          setLineDailyReportTime(data.lineMessagingConfig.dailyReportTime || "");
+          setLineWeeklyReportEnabled(!!data.lineMessagingConfig.weeklyReportEnabled);
+          setLineWeeklyReportDay(data.lineMessagingConfig.weeklyReportDay || "");
+          setLineWeeklyReportTime(data.lineMessagingConfig.weeklyReportTime || "");
           if (data.lineMessagingConfig.triggers) {
             setLineTriggers(data.lineMessagingConfig.triggers);
+          }
+        }
+
+        // Check for old lineConfig for migration warning
+        if (data.lineConfig) {
+          const lConfig = data.lineConfig;
+          setOldLiffId(lConfig.liffId || "");
+          if (lConfig.liffId && lConfig.liffId !== data.lineMessagingConfig?.liffId) {
+            setShowSyncWarning(true);
           }
         }
 
@@ -649,6 +716,22 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
           if (Array.isArray(data.approvalWorkflow.rules) && data.approvalWorkflow.rules.length > 0) {
             setApprovalRules(data.approvalWorkflow.rules);
           }
+        }
+
+        // Load rolePermissions
+        if (data.rolePermissions) {
+          setRolePermissions(data.rolePermissions);
+        } else {
+          // Initialize default rolePermissions if not present
+          setRolePermissions({
+            admin: { canRequest: true, canClear: true, canApprove: true, canAudit: true, canCloseAccount: true, canViewDBD: true, canViewProjectCosts: true, canManageUsers: true, canManageSettings: true },
+            ceo: { canRequest: false, canClear: false, canApprove: true, canAudit: false, canCloseAccount: false, canViewDBD: true, canViewProjectCosts: true, canManageUsers: false, canManageSettings: false },
+            executive: { canRequest: false, canClear: false, canApprove: true, canAudit: false, canCloseAccount: false, canViewDBD: true, canViewProjectCosts: true, canManageUsers: false, canManageSettings: false },
+            accounting: { canRequest: false, canClear: false, canApprove: false, canAudit: true, canCloseAccount: true, canViewDBD: true, canViewProjectCosts: true, canManageUsers: false, canManageSettings: false },
+            pm: { canRequest: true, canClear: true, canApprove: false, canAudit: false, canCloseAccount: false, canViewDBD: false, canViewProjectCosts: true, canManageUsers: false, canManageSettings: false },
+            foreman: { canRequest: true, canClear: true, canApprove: false, canAudit: false, canCloseAccount: false, canViewDBD: false, canViewProjectCosts: false, canManageUsers: false, canManageSettings: false },
+            employee: { canRequest: true, canClear: true, canApprove: false, canAudit: false, canCloseAccount: false, canViewDBD: false, canViewProjectCosts: false, canManageUsers: false, canManageSettings: false }
+          });
         }
 
         // Load categoryDetails
@@ -703,6 +786,108 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
       await setDoc(doc(db, "auditLogs", auditId), log);
     } catch (err) {
       console.error("Audit log write failed:", err);
+    }
+  };
+
+  const handleResetTransactionsForProduction = async () => {
+    if (resetConfirmWord !== "RESET") {
+      alert("กรุณาพิมพ์คำว่า RESET เพื่อยืนยันการล้างข้อมูล");
+      return;
+    }
+
+    setResetting(true);
+    setResetSuccess(null);
+    setResetError(null);
+
+    try {
+      // Collections to completely clear
+      const collectionsToClear = [
+        "advances",
+        "clearingLogs",
+        "clearingItems",
+        "GL",
+        "vat_entries",
+        "wht_entries",
+        "vendor_reports",
+        "employee_outstanding_reports",
+        "document_tracking",
+        "vaultFiles",
+        "auditLogs"
+      ];
+
+      let totalClearedDocs = 0;
+
+      // Clear each collection
+      for (const colName of collectionsToClear) {
+        const snap = await getDocs(collection(db, colName));
+        let batch = writeBatch(db);
+        let count = 0;
+
+        for (const docSnap of snap.docs) {
+          batch.delete(docSnap.ref);
+          count++;
+          totalClearedDocs++;
+
+          // Firestore batch size limit is 500
+          if (count >= 400) {
+            await batch.commit();
+            batch = writeBatch(db);
+            count = 0;
+          }
+        }
+
+        if (count > 0) {
+          await batch.commit();
+        }
+      }
+
+      // Clear/Reset Projects cost stats collection
+      const projectsSnap = await getDocs(collection(db, "projects"));
+      let projectBatch = writeBatch(db);
+      let projCount = 0;
+
+      for (const docSnap of projectsSnap.docs) {
+        projectBatch.delete(docSnap.ref);
+        projCount++;
+        totalClearedDocs++;
+
+        if (projCount >= 400) {
+          await projectBatch.commit();
+          projectBatch = writeBatch(db);
+          projCount = 0;
+        }
+      }
+
+      if (projCount > 0) {
+        await projectBatch.commit();
+      }
+
+      // Add a fresh audit log indicating the system reset
+      const auditId = `audit-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const log: AuditLog = {
+        id: auditId,
+        advId: "SYSTEM-RESET",
+        actionType: ActionType.SYSTEM_CONFIG_CHANGED,
+        actionBy: currentEmployee.name,
+        role: currentEmployee.role,
+        timestamp: new Date().toISOString(),
+        beforeStatus: "TEST_ENVIRONMENT",
+        afterStatus: "PRODUCTION_ACTIVE",
+        note: `ล้างข้อมูลธุรกรรมรวม ${totalClearedDocs} รายการเพื่อเริ่มใช้งานจริงของระบบ (ข้อมูลพนักงานและโครงการยังอยู่ครบถ้วน)`,
+      };
+      await setDoc(doc(db, "auditLogs", auditId), log);
+
+      setResetSuccess(`ล้างข้อมูลธุรกรรมทั้งหมดรวม ${totalClearedDocs} รายการเรียบร้อยแล้ว! (แยกเป็น เอกสารเบิก, เอกสารเคลียร์, รายละเอียดบิล, รายการแยกประเภท, บัญชีภาษี, ตารางติดตาม, ประวัติการทำงาน และข้อมูลไฟล์แนบ) โครงสร้างโครงการและรายชื่อพนักงานถูกรักษาไว้อย่างถูกต้องและพร้อมเริ่มใช้งานระบบจริงทันที ✨`);
+      setResetConfirmWord("");
+      setShowResetModal(false);
+      
+      // Refresh local system state
+      await fetchAllData();
+    } catch (err: any) {
+      console.error("Error resetting system for production:", err);
+      setResetError(`เกิดข้อผิดพลาดในการล้างข้อมูล: ${err.message}`);
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -813,6 +998,33 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
     }
   };
 
+  const handlePositionChange = async (empId: string, username: string, newPosition: string) => {
+    setError(null);
+    setSuccess(null);
+    setSaving(true);
+    try {
+      const empRef = doc(db, "employees", empId);
+      await updateDoc(empRef, { 
+        positionId: newPosition,
+        position: newPosition,
+        positionName: newPosition
+      });
+
+      await writeAuditLog(
+        ActionType.ACCOUNTING_APPROVE,
+        `อัปเดตตำแหน่งของพนักงาน @${username || empId} เป็น ${newPosition || 'ไม่ระบุ'}`
+      );
+
+      setSuccess(`อัปเดตตำแหน่งเป็น "${newPosition || 'ไม่ระบุ'}" เรียบร้อยแล้ว`);
+      await fetchAllData();
+    } catch (err) {
+      console.error(err);
+      setError("ไม่สามารถเปลี่ยนตำแหน่งผู้ใช้งานได้");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // Update user status active toggle
   const handleStatusToggle = async (empId: string, currentStatus: string) => {
     setError(null);
@@ -870,10 +1082,10 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
       };
 
       const settingsRef = doc(db, "settings", "global");
-      await setDoc(settingsRef, { 
+      await updateDoc(settingsRef, { 
         projects: updated,
         projectDetails: updatedDetails
-      }, { merge: true });
+      });
 
       await writeAuditLog(
         ActionType.ACCOUNTING_APPROVE,
@@ -1000,24 +1212,89 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   // Approval Workflow states
   const [approvalThreshold, setApprovalThreshold] = useState<number>(5000);
   const [autoApproveAccounting, setAutoApproveAccounting] = useState<boolean>(true);
-  const [approvalRules, setApprovalRules] = useState<ApprovalConditionRule[]>([
-    {
-      id: "rule-under-5000",
-      name: "ยอดต่ำกว่า 5,000 บาท",
-      minAmount: 0,
-      maxAmount: 5000,
-      approverRoles: [UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN],
-      isActive: true,
-    },
-    {
-      id: "rule-5000-up",
-      name: "ยอดตั้งแต่ 5,000 บาทขึ้นไป",
-      minAmount: 5000.01,
-      maxAmount: 999999999,
-      approverRoles: [UserRole.ADMIN],
-      isActive: true,
-    },
-  ]);
+  const [approvalRules, setApprovalRules] = useState<ApprovalConditionRule[]>([]);
+  const [rolePermissions, setRolePermissions] = useState<{
+    [position: string]: {
+      canRequest: boolean;
+      canClear: boolean;
+      canApprove: boolean;
+      canAudit: boolean;
+      canCloseAccount: boolean;
+      canViewDBD: boolean;
+      canViewProjectCosts: boolean;
+      canManageUsers: boolean;
+      canManageSettings: boolean;
+    }
+  }>({});
+
+  const seedDefaultApprovalRules = () => {
+    const defaults: ApprovalConditionRule[] = [
+      {
+        id: "rule-under-5000",
+        name: "ยอดต่ำกว่า 5,000 บาท",
+        isActive: true,
+        documentType: "ADVANCE",
+        minAmount: 0,
+        maxAmount: 5000,
+        approverRoles: [UserRole.ADMIN, UserRole.MANAGER],
+        approverRoleIds: ["admin", "manager", "pm"],
+        projectScope: "all_projects",
+        allowLineLiffApproval: true,
+        canApproveOwnRequest: false
+      },
+      {
+        id: "rule-5000-up",
+        name: "ยอดตั้งแต่ 5,000 บาทขึ้นไป",
+        isActive: true,
+        documentType: "ADVANCE",
+        minAmount: 5000.01,
+        maxAmount: 999999999,
+        approverRoles: [UserRole.ADMIN, UserRole.MANAGER],
+        approverRoleIds: ["admin", "manager"],
+        projectScope: "all_projects",
+        allowLineLiffApproval: true,
+        canApproveOwnRequest: false
+      }
+    ];
+    setApprovalRules(defaults);
+  };
+
+  const [newPosition, setNewPosition] = useState("");
+  const handleAddPosition = async () => {
+    if (!newPosition.trim()) return;
+    if (positions.includes(newPosition.trim())) {
+      setError("ชื่อตำแหน่งนี้มีอยู่แล้ว");
+      return;
+    }
+    const updated = [...positions, newPosition.trim()];
+    setPositions(updated);
+    const settingsRef = doc(db, "settings", "global");
+    await setDoc(settingsRef, { positions: updated }, { merge: true });
+    setNewPosition("");
+    setSuccess("เพิ่มตำแหน่งใหม่สำเร็จ");
+  };
+
+  const [editingPositionIdx, setEditingPositionIdx] = useState<number | null>(null);
+  const [editingPositionText, setEditingPositionText] = useState("");
+  const handleUpdatePosition = async (index: number) => {
+    if (!editingPositionText.trim()) return;
+    const updated = [...positions];
+    updated[index] = editingPositionText.trim();
+    setPositions(updated);
+    const settingsRef = doc(db, "settings", "global");
+    await setDoc(settingsRef, { positions: updated }, { merge: true });
+    setEditingPositionIdx(null);
+    setSuccess("แก้ไขตำแหน่งสำเร็จ");
+  };
+
+  const handleDeletePosition = async (posName: string) => {
+    if (!window.confirm(`ยืนยันการลบตำแหน่ง "${posName}"?`)) return;
+    const updated = positions.filter((p) => p !== posName);
+    setPositions(updated);
+    const settingsRef = doc(db, "settings", "global");
+    await setDoc(settingsRef, { positions: updated }, { merge: true });
+    setSuccess("ลบตำแหน่งสำเร็จ");
+  };
 
   const handleSaveApprovalWorkflow = async () => {
     setSaving(true);
@@ -1030,9 +1307,10 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
           threshold: approvalThreshold,
           autoApproveAccounting: autoApproveAccounting,
           rules: approvalRules
-        }
+        },
+        rolePermissions: rolePermissions
       }, { merge: true });
-      setSuccess("บันทึกเวิร์คโฟลการอนุมัติเรียบร้อยแล้ว!");
+      setSuccess("บันทึกเมทริกซ์สิทธิ์ตามตำแหน่งและเงื่อนไขการอนุมัติสำเร็จ!");
     } catch (err: any) {
       console.error(err);
       setError("ไม่สามารถบันทึกเวิร์คโฟลการอนุมัติได้: " + err.message);
@@ -1050,24 +1328,99 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
       if (invalidFlex) {
         throw new Error(`Flex Message JSON ของ "${invalidFlex.name}" ไม่ถูกต้อง กรุณาแก้ไขก่อนบันทึก`);
       }
+
+      // Validate placeholders to prevent "The string did not match the expected pattern" error
+      const placeholderIssue = lineTriggers.find(trigger => {
+        const template = trigger.messageTemplate || "";
+        return trigger.isActive && (/\{id\}/i.test(template) || /\{LIFF_ID\}/.test(template));
+      });
+      if (placeholderIssue) {
+        throw new Error(`เทมเพลตของ "${placeholderIssue.name}" ยังมีตัวแปร {id} หรือ {LIFF_ID} ค้างอยู่ ซึ่งอาจทำให้ระบบ LINE แสดงข้อความผิดพลาด "The string did not match the expected pattern" กรุณาเปลี่ยนเป็น {advId} สำหรับเลขเอกสาร และใช้ {liffId} แทนเพื่อป้องกันข้อผิดพลาด`);
+      }
+
+      // Validate LIFF ID format and sanitize
+      let sanitizedLiffId = String(lineLiffId || "").trim();
+      if (sanitizedLiffId.includes("liff.line.me/")) {
+        sanitizedLiffId = sanitizedLiffId.split("liff.line.me/")[1].split("?")[0].split("/")[0];
+        setLineLiffId(sanitizedLiffId);
+      }
+
+      if (sanitizedLiffId && sanitizedLiffId !== "{LIFF_ID}" && sanitizedLiffId !== "123456-abcde" && !/^\d{10}-[\w\d]{8}$/.test(sanitizedLiffId)) {
+        if (!window.confirm(`รูปแบบ LIFF ID "${sanitizedLiffId}" ดูเหมือนจะไม่ถูกต้อง (ปกติควรเป็น 10 หลัก ตามด้วยขีด และรหัส 8 หลัก เช่น 2010571826-xxxxxxxx) หากใส่ผิดอาจเกิด Error "The string did not match the expected pattern" ใน LINE ได้ คุณแน่ใจหรือไม่ว่าต้องการใช้ค่านี้?`)) {
+          setSaving(false);
+          return;
+        }
+      }
+
       const settingsRef = doc(db, "settings", "global");
       await setDoc(settingsRef, {
         lineMessagingConfig: {
           channelAccessToken: lineChannelAccessToken,
           channelSecret: lineChannelSecret,
-          liffId: lineLiffId,
+          liffId: sanitizedLiffId,
+          appBaseUrl: lineAppBaseUrl,
           groupId: lineGroupId.trim(),
+          groupName: lineGroupName.trim(),
+          enableGroupNotification: lineEnableGroupNotification,
+          dailyReportEnabled: lineDailyReportEnabled,
+          dailyReportTime: lineDailyReportTime,
+          weeklyReportEnabled: lineWeeklyReportEnabled,
+          weeklyReportDay: lineWeeklyReportDay,
+          weeklyReportTime: lineWeeklyReportTime,
           lineGroupId: lineGroupId.trim(),
           triggers: lineTriggers
+        },
+        // Automatically sync for backward compatibility, but we prefer reading from lineMessagingConfig
+        lineConfig: {
+          liffId: sanitizedLiffId,
+          updatedAt: new Date().toISOString()
         }
       }, { merge: true });
-      await writeAuditLog(ActionType.SYSTEM_CONFIG_CHANGED, "ปรับปรุงการตั้งค่า LINE Messaging API");
+      setShowSyncWarning(false);
+      setOldLiffId(sanitizedLiffId);
+      await writeAuditLog(ActionType.SYSTEM_CONFIG_CHANGED, "ปรับปรุงการตั้งค่า LINE Messaging API และซิงค์ LIFF ID");
       setSuccess("บันทึกการตั้งค่า LINE Messaging API เรียบร้อยแล้ว!");
     } catch (err: any) {
       console.error(err);
       setError(`บันทึกตั้งค่าการแจ้งเตือนทาง LINE ล้มเหลว: ${err?.message || err}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSendLinkingInvitations = async () => {
+    if (selectedUnlinkedEmpIds.length === 0) {
+      alert("กรุณาเลือกพนักงานที่ต้องการส่งคำเชิญอย่างน้อย 1 คน");
+      return;
+    }
+
+    setSendingInvitations(true);
+    setInvitationSuccess(null);
+    setInvitationError(null);
+
+    try {
+      const res = await fetch("/api/line/send-linking-invitation", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          employeeIds: selectedUnlinkedEmpIds,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "เกิดข้อผิดพลาดในการส่งคำเชิญ");
+      }
+
+      setInvitationSuccess(`ส่งคำเชิญลงทะเบียนผูกบัญชี LINE ไปยัง LINE Group สำหรับพนักงานทั้ง ${data.recipientsCount} คนสำเร็จแล้ว!`);
+      setSelectedUnlinkedEmpIds([]);
+    } catch (err: any) {
+      console.error("Failed to send invitations", err);
+      setInvitationError(err.message || "เกิดข้อผิดพลาดขึ้น");
+    } finally {
+      setSendingInvitations(false);
     }
   };
 
@@ -1564,9 +1917,9 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
       }
 
       const settingsRef = doc(db, "settings", "global");
-      await setDoc(settingsRef, {
+      await updateDoc(settingsRef, {
         categories: finalCategories
-      }, { merge: true });
+      });
 
       await writeAuditLog(
         ActionType.ACCOUNTING_APPROVE,
@@ -1591,9 +1944,9 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
     setSuccess(null);
     try {
       const settingsRef = doc(db, "settings", "global");
-      await setDoc(settingsRef, {
+      await updateDoc(settingsRef, {
         categoryDetails: categoryDetails
-      }, { merge: true });
+      });
 
       await writeAuditLog(
         ActionType.ACCOUNTING_APPROVE,
@@ -1804,7 +2157,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
       if (importedData.docTemplate) {
         updatePayload.docTemplate = finalDocTemplate;
       }
-      await setDoc(settingsRef, updatePayload, { merge: true });
+      await updateDoc(settingsRef, updatePayload);
 
       // Update state
       setProjects(finalProjects);
@@ -1837,8 +2190,6 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
 
   // Remove Project
   const handleRemoveProject = async (projName: string) => {
-    if (!window.confirm(`คุณแน่ใจที่จะลบโครงการ "${projName}"?`)) return;
-
     setSaving(true);
     setError(null);
     setSuccess(null);
@@ -1849,11 +2200,11 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
       delete updatedDetails[projName];
       delete updatedBudgets[projName];
       const settingsRef = doc(db, "settings", "global");
-      await setDoc(settingsRef, {
+      await updateDoc(settingsRef, {
         projects: updated,
         projectDetails: updatedDetails,
         projectBudgets: updatedBudgets
-      }, { merge: true });
+      });
 
       await writeAuditLog(
         ActionType.ACCOUNTING_APPROVE,
@@ -1887,7 +2238,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
     try {
       const updated = [...categories, newCategory.trim()];
       const settingsRef = doc(db, "settings", "global");
-      await setDoc(settingsRef, { categories: updated }, { merge: true });
+      await updateDoc(settingsRef, { categories: updated });
 
       await writeAuditLog(
         ActionType.ACCOUNTING_APPROVE,
@@ -1931,7 +2282,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
         delete updatedCategoryDetails[oldName];
       }
       const settingsRef = doc(db, "settings", "global");
-      await setDoc(settingsRef, { categories: updated, categoryDetails: updatedCategoryDetails }, { merge: true });
+      await updateDoc(settingsRef, { categories: updated, categoryDetails: updatedCategoryDetails });
 
       await writeAuditLog(
         ActionType.ACCOUNTING_APPROVE,
@@ -1984,11 +2335,11 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
       }
 
       const settingsRef = doc(db, "settings", "global");
-      await setDoc(settingsRef, { 
+      await updateDoc(settingsRef, { 
         projects: updated,
         projectDetails: updatedDetails,
         projectBudgets: updatedProjectBudgets
-      }, { merge: true });
+      });
 
       setProjBudgets(updatedProjectBudgets); // update state!
 
@@ -2010,8 +2361,6 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
   };
 
   const handleRemoveCategory = async (catName: string) => {
-    if (!window.confirm(`คุณแน่ใจที่จะลบหมวดหมู่ "${catName}"?`)) return;
-
     setSaving(true);
     setError(null);
     setSuccess(null);
@@ -2020,7 +2369,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
       const updatedCategoryDetails = { ...categoryDetails };
       delete updatedCategoryDetails[catName];
       const settingsRef = doc(db, "settings", "global");
-      await setDoc(settingsRef, { categories: updated, categoryDetails: updatedCategoryDetails }, { merge: true });
+      await updateDoc(settingsRef, { categories: updated, categoryDetails: updatedCategoryDetails });
 
       await writeAuditLog(
         ActionType.ACCOUNTING_APPROVE,
@@ -2599,9 +2948,8 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
 
                 <div className="flex flex-wrap gap-2 bg-stone-100 border border-stone-200 rounded-2xl p-2">
                   {[
-                    { id: "employees", label: "พนักงาน" },
                     { id: "projects", label: "โครงการ" },
-                    { id: "project_costs", label: "งบโครงการ" },
+                    { id: "categories", label: "หมวดหมู่ค่าใช้จ่าย" },
                     { id: "advances", label: "ADV" },
                     { id: "clearing", label: "Clearing" },
                     { id: "expenses", label: "ค่าใช้จ่าย" },
@@ -2622,9 +2970,180 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                   ))}
                 </div>
 
-                {activeMasterDataTab === "employees" && <EmployeeManagement />}
+
                 {activeMasterDataTab === "projects" && <ProjectManagement />}
-                {activeMasterDataTab === "project_costs" && <ProjectCostSummary />}
+                {activeMasterDataTab === "categories" && (
+                  <div className="bg-white border border-stone-200 rounded-2xl p-6 shadow-sm space-y-6">
+                    <div className="flex justify-between items-center border-b border-stone-100 pb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center">
+                          <Tag className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-black text-stone-900">จัดการหมวดหมู่ค่าใช้จ่าย (Expense Categories)</h3>
+                          <p className="text-[10px] text-stone-500">
+                            กำหนดหมวดหมู่ของค่าใช้จ่ายในระบบเบิกจ่าย เพื่อใช้วัดผลและจัดกลุ่มบัญชีในรายงานสถิติทางการเงิน
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const dataToExport = categories.map(cat => ({ "ชื่อหมวดหมู่": cat }));
+                          exportToExcel(dataToExport, "Expense_Categories");
+                        }}
+                        className="px-3 py-2 bg-white border border-stone-200 text-stone-600 hover:text-emerald-600 hover:bg-stone-50 rounded-xl shadow-xs transition flex items-center gap-1.5 text-[10px] font-bold"
+                      >
+                        <Download className="w-3.5 h-3.5" /> Export Excel
+                      </button>
+                    </div>
+
+                    <div className="bg-stone-50 border border-stone-200 rounded-xl p-3 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <HardDrive className="w-4 h-4 text-stone-500" />
+                        <span className="text-xs font-semibold text-stone-700">พื้นที่เก็บข้อมูลหมวดหมู่:</span>
+                        <span className="text-xs font-bold text-emerald-600">ไม่จำกัด (Unlimited)</span>
+                      </div>
+                      <div className="text-[10px] text-stone-500 font-medium">
+                        จำนวนหมวดหมู่: <span className="font-bold text-stone-900">{categories.length}</span> โฟลเดอร์
+                      </div>
+                    </div>
+
+                    {/* Add new category form */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <form 
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleAddCategory(e);
+                        }} 
+                        className="flex-1 flex gap-2 max-w-md"
+                      >
+                        <input
+                          type="text"
+                          required
+                          placeholder="เช่น Material Cost (ค่าวัสดุก่อสร้าง)"
+                          value={newCategory}
+                          onChange={(e) => setNewCategory(e.target.value)}
+                          className="flex-1 px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-stone-950 text-xs"
+                        />
+                        <button
+                          type="submit"
+                          disabled={saving}
+                          className="px-5 py-2.5 bg-stone-950 hover:bg-stone-900 text-white font-bold rounded-xl transition flex items-center gap-1 shrink-0 text-xs"
+                        >
+                          <Plus className="w-4 h-4" /> เพิ่มหมวดหมู่
+                        </button>
+                      </form>
+                      <button
+                        type="button"
+                        onClick={() => setIsBulkImportCategoriesOpen(true)}
+                        className="px-5 py-2.5 border border-stone-200 hover:bg-stone-50 text-stone-700 font-bold rounded-xl transition flex items-center gap-1 shrink-0 text-xs"
+                      >
+                        <Plus className="w-4 h-4 text-stone-500" /> นำเข้าหมวดหมู่แบบกลุ่ม (Bulk Import)
+                      </button>
+                    </div>
+
+                    {/* List Table */}
+                    <div className="max-w-2xl border border-stone-200 rounded-2xl overflow-hidden bg-white shadow-sm">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-stone-50 border-b border-stone-200 text-[10px] font-extrabold text-stone-400 uppercase tracking-widest">
+                            <th className="py-2.5 px-4">ชื่อหมวดหมู่ค่าใช้จ่าย</th>
+                            <th className="py-2.5 px-4 w-40">รหัสหมวดหมู่ (Category ID)</th>
+                            <th className="py-2.5 px-4 text-right">ดำเนินการ</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-stone-100">
+                          {categories.map((cat, i) => (
+                            <tr key={i} className="hover:bg-stone-50/30">
+                              <td className="py-3 px-4 font-semibold text-stone-800">
+                                {editingCategoryIndex === i ? (
+                                  <div className="flex gap-2 items-center">
+                                    <input
+                                      type="text"
+                                      value={editingCategoryText}
+                                      onChange={(e) => setEditingCategoryText(e.target.value)}
+                                      className="px-2 py-1 bg-white border border-stone-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-stone-950 w-full max-w-[200px] font-bold"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleEditCategory(i)}
+                                      className="p-1 text-green-600 hover:bg-green-50 rounded"
+                                    >
+                                      <Check className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingCategoryIndex(null)}
+                                      className="p-1 text-stone-500 hover:bg-stone-100 rounded"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  cat
+                                )}
+                              </td>
+                              <td className="py-3 px-4">
+                                <input
+                                  type="text"
+                                  placeholder="เช่น CAT-01"
+                                  value={categoryDetails[cat]?.categoryId || ""}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setCategoryDetails(prev => ({
+                                      ...prev,
+                                      [cat]: { categoryId: val }
+                                    }));
+                                  }}
+                                  className="bg-transparent border-b border-dashed border-stone-300 text-[11px] font-mono font-bold text-stone-600 focus:outline-none focus:border-stone-900 w-full"
+                                />
+                              </td>
+                              <td className="py-3 px-4 text-right">
+                                <div className="flex justify-end gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingCategoryIndex(i);
+                                      setEditingCategoryText(cat);
+                                    }}
+                                    disabled={saving}
+                                    className="p-1 text-stone-400 hover:text-stone-900 hover:bg-stone-50 rounded transition"
+                                    title="แก้ไข"
+                                  >
+                                    <Edit2 className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setCategoryToDelete(cat)}
+                                    disabled={saving}
+                                    className="p-1 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded transition"
+                                    title="ลบหมวดหมู่"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {categories.length > 0 && (
+                      <div className="flex justify-start max-w-2xl pt-2">
+                        <button
+                          type="button"
+                          onClick={handleSaveCategoryDetails}
+                          disabled={saving}
+                          className="px-5 py-2.5 bg-stone-950 hover:bg-stone-900 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+                        >
+                          <Check className="w-3.5 h-3.5" /> บันทึกรหัสหมวดหมู่ทั้งหมด
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {activeMasterDataTab === "advances" && <AdvanceManagement />}
                 {activeMasterDataTab === "clearing" && <ClearingHistory />}
                 {activeMasterDataTab === "expenses" && <ExpenseItems />}
@@ -2657,350 +3176,128 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
               </div>
             )}
 
-            {/* SUB TAB: User Management */}
+            {/* SUB TAB: Unified Employee & Positions Management */}
             {activeSubTab === "users" && (
               <div className="space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <h3 className="text-sm font-bold text-stone-900">ทะเบียนและระดับสิทธิ์ผู้ใช้งาน (User & Role Directory)</h3>
-                    <p className="text-xs text-stone-500">
-                      อนุมัติพนักงานที่ลงทะเบียนเข้ามาใหม่ ยกระดับสิทธิ์ หรือเปลี่ยนสถานะการเปิดใช้งาน
-                    </p>
-                  </div>
-
-                  <div className="flex bg-stone-100 border border-stone-200 rounded-lg p-0.5 shrink-0 self-start sm:self-auto">
-                    <button
-                      onClick={() => exportToExcel(employees, `Employees_Directory_${new Date().toISOString().split('T')[0]}`)}
-                      className="px-2.5 py-1.5 rounded-md text-[11px] font-bold flex items-center gap-1 text-emerald-700 hover:bg-emerald-50 transition"
-                      title="ส่งออกรายชื่อพนักงานเป็น Excel"
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
-                    </button>
-                    <div className="w-[1px] bg-stone-200 mx-0.5 my-1" />
-                    <button
-                      type="button"
-                      onClick={() => setIsBulkImportUsersOpen(true)}
-                      className="px-2.5 py-1.5 rounded-md text-[11px] font-bold flex items-center gap-1 text-blue-700 hover:bg-blue-50 transition"
-                      title="นำเข้ารายชื่อพนักงานหลายรายการ (Bulk Import)"
-                    >
-                      <Plus className="w-3.5 h-3.5" /> นำเข้า (Bulk)
-                    </button>
-                    <div className="w-[1px] bg-stone-200 mx-0.5 my-1" />
-                    <button
-                      onClick={() => setViewMode("table")}
-                      className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold flex items-center gap-1 transition ${
-                        viewMode === "table" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"
-                      }`}
-                    >
-                      <List className="w-3.5 h-3.5" /> ตาราง
-                    </button>
-                    <button
-                      onClick={() => setViewMode("card")}
-                      className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold flex items-center gap-1 transition ${
-                        viewMode === "card" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"
-                      }`}
-                    >
-                      <Grid className="w-3.5 h-3.5" /> การ์ด
-                    </button>
-                  </div>
+                <div className="flex flex-col gap-1">
+                  <h3 className="text-sm font-bold text-stone-900">จัดการพนักงาน & สิทธิ์การใช้งาน (Employees & Permissions)</h3>
+                  <p className="text-xs text-stone-500">
+                    จัดการข้อมูลรายชื่อพนักงาน บัญชีผู้ใช้งาน สิทธิ์การเข้าถึง และสิทธิ์การอนุมัติ รวมถึงรหัสพินและรายชื่อตำแหน่งงาน
+                  </p>
                 </div>
 
-                {viewMode === "table" ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-stone-50 border-b border-stone-200 text-[10px] font-extrabold text-stone-400 uppercase tracking-widest">
-                          <th className="py-3 px-4">รูปโปรไฟล์</th>
-                          <th className="py-3 px-4">ชื่อ / บัญชีผู้ใช้</th>
-                          <th className="py-3 px-4">บทบาท (RBAC)</th>
-                          <th className="py-3 px-4">บัญชีธนาคาร</th>
-                          <th className="py-3 px-4">สถานะ (Status)</th>
-                          <th className="py-3 px-4 text-right">ดำเนินการ</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-stone-100">
-                        {employees.map((emp) => {
-                          const isPending = emp.isApprovedByAdmin === false;
-                          return (
-                            <tr key={emp.id} className="hover:bg-stone-50/50">
-                              
-                              {/* Profile Thumbnail Render */}
-                              <td className="py-3 px-4">
-                                <div className="w-10 h-10 rounded-full bg-stone-100 border border-stone-200 overflow-hidden flex items-center justify-center">
-                                  {emp.profilePhotoURL || emp.profileImage ? (
-                                    <img 
-                                      src={emp.profilePhotoURL || emp.profileImage} 
-                                      alt={emp.name} 
-                                      className="w-full h-full object-cover"
-                                      referrerPolicy="no-referrer"
-                                    />
-                                  ) : (
-                                    <Users className="w-4 h-4 text-stone-400" />
-                                  )}
-                                </div>
-                              </td>
+                {/* Sub Tab Switches inside Employees Subtab */}
+                <div className="flex gap-2 border-b border-stone-200 pb-px">
+                  <button
+                    type="button"
+                    onClick={() => setEmployeeSubTab("directory")}
+                    className={`px-4 py-2 font-bold text-xs border-b-2 transition-all ${
+                      employeeSubTab === "directory"
+                        ? "border-stone-950 text-stone-950"
+                        : "border-transparent text-stone-500 hover:text-stone-800"
+                    }`}
+                  >
+                    💼 ทะเบียนพนักงาน & สิทธิ์
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEmployeeSubTab("positions")}
+                    className={`px-4 py-2 font-bold text-xs border-b-2 transition-all ${
+                      employeeSubTab === "positions"
+                        ? "border-stone-950 text-stone-950"
+                        : "border-transparent text-stone-500 hover:text-stone-800"
+                    }`}
+                  >
+                    🛡️ ตั้งค่าตำแหน่งพนักงาน (Positions)
+                  </button>
+                </div>
 
-                              <td className="py-3 px-4">
-                                <div className="font-bold text-stone-900">{emp.name}</div>
-                                {emp.username && (
-                                  <div className="text-[10px] text-stone-500 font-mono">
-                                    @{emp.username}
-                                  </div>
-                                )}
-                                <div className="text-[10px] text-stone-400 font-mono">ID: {emp.id}</div>
-                                {emp.plainPin && (
-                                  <div className="text-[10px] text-stone-600 font-mono bg-stone-100 px-1.5 py-0.5 rounded w-max mt-1 border border-stone-200/50">
-                                    PIN/รหัส: <span className="font-extrabold text-stone-950">{emp.plainPin}</span>
-                                  </div>
-                                )}
-                              </td>
+                {employeeSubTab === "directory" && (
+                  <EmployeeManagement />
+                )}
 
-                              <td className="py-3 px-4 font-semibold">
-                                {isPending ? (
-                                  <span className="text-amber-600 bg-amber-50 px-2 py-0.5 border border-amber-200/50 rounded-md font-bold">
-                                    รอ Admin กำหนดบทบาท
-                                  </span>
-                                ) : (
-                                  <select
-                                    value={emp.role}
-                                    onChange={(e) => handleRoleChange(emp.id, emp.username || "", e.target.value as UserRole)}
-                                    className="bg-stone-50 border border-stone-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-stone-950 font-bold text-stone-800"
-                                  >
-                                    <option value={UserRole.EMPLOYEE}>Employee (พนักงาน)</option>
-                                    <option value={UserRole.MANAGER}>Manager (ผู้จัดการ)</option>
-                                    <option value={UserRole.ACCOUNTANT}>Accountant (นักบัญชี)</option>
-                                    <option value={UserRole.ADMIN}>Admin (ผู้ดูแลระบบ)</option>
-                                  </select>
-                                )}
-                              </td>
+                {employeeSubTab === "positions" && (
+                  <div className="bg-white border border-stone-200 rounded-2xl p-6 shadow-sm space-y-6">
+                    <div className="flex items-center gap-3 border-b border-stone-100 pb-4">
+                      <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center">
+                        <ShieldCheck className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-black text-stone-900">ตั้งค่าตำแหน่งพนักงาน (Positions)</h3>
+                        <p className="text-[10px] text-stone-500">กำหนดตำแหน่งที่มีในองค์กรสำหรับใช้ในข้อมูลพนักงานและเงื่อนไขการอนุมัติ</p>
+                      </div>
+                    </div>
 
-                              <td className="py-3 px-4 font-mono text-[11px] text-stone-600">
-                                <div className="font-sans font-semibold text-stone-800">{emp.bankName}</div>
-                                <div>{emp.bankNo}</div>
-                                <div className="text-[10px] text-stone-400 font-sans">{emp.bankAccountName}</div>
-                              </td>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newPosition}
+                        onChange={(e) => setNewPosition(e.target.value)}
+                        placeholder="ระบุชื่อตำแหน่งใหม่ (เช่น PM, Director, CEO)"
+                        className="flex-1 bg-stone-50 border border-stone-200 rounded-xl px-4 py-2.5 text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                      <button
+                        onClick={handleAddPosition}
+                        className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl text-xs font-bold hover:bg-indigo-700 transition shadow-lg shadow-indigo-200 shrink-0"
+                      >
+                        เพิ่มตำแหน่ง
+                      </button>
+                    </div>
 
-                              <td className="py-3 px-4">
-                                <div className="flex items-center gap-1.5">
-                                  <span
-                                    className={`w-2 h-2 rounded-full ${
-                                      emp.status === "Active" || emp.isActive !== false
-                                        ? "bg-emerald-500"
-                                        : "bg-red-500"
-                                    }`}
-                                  />
-                                  <span className="font-bold">
-                                    {emp.status || (emp.isActive !== false ? "Active" : "Suspended")}
-                                  </span>
-                                </div>
-                              </td>
-
-                              <td className="py-3 px-4 text-right">
-                                <div className="flex justify-end gap-1.5">
-                                  <button
-                                    onClick={() => startEditEmployee(emp)}
-                                    className="px-2 py-1 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-md font-bold text-[10px] border border-stone-250"
-                                  >
-                                    แก้ไข
-                                  </button>
-                                  {isPending ? (
-                                    <>
-                                      {/* Fast approval buttons directly inside admin management */}
-                                      <button
-                                        onClick={() => handleApproveUser(emp, UserRole.EMPLOYEE)}
-                                        disabled={saving}
-                                        className="px-2.5 py-1.5 bg-stone-900 hover:bg-stone-800 text-stone-50 font-bold rounded-lg transition"
-                                      >
-                                        อนุมัติ (Employee)
-                                      </button>
-                                      <button
-                                        onClick={() => handleApproveUser(emp, UserRole.MANAGER)}
-                                        disabled={saving}
-                                        className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold rounded-lg transition"
-                                      >
-                                        อนุมัติ (Manager)
-                                      </button>
-                                      <button
-                                        onClick={() => handleRejectUser(emp.id)}
-                                        disabled={saving}
-                                        className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition"
-                                        title="ปฏิเสธการลงทะเบียน"
-                                      >
-                                        <X className="w-4 h-4" />
-                                      </button>
-                                    </>
-                                  ) : (
-                                    <button
-                                      onClick={() => handleStatusToggle(emp.id, emp.status || "Active")}
-                                      disabled={saving}
-                                      className={`px-2 py-1 rounded-md font-bold text-[10px] transition ${
-                                        emp.status === "Active" || emp.isActive !== false
-                                          ? "bg-red-50 hover:bg-red-100 text-red-600 border border-red-200"
-                                          : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200"
-                                      }`}
-                                    >
-                                      {emp.status === "Active" || emp.isActive !== false ? "ระงับการใช้" : "เปิดการใช้งาน"}
-                                    </button>
-                                  )}
-                                  <button
-                                    onClick={() => handleDeleteEmployee(emp.id, emp.name)}
-                                    disabled={saving}
-                                    className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-600 rounded-md font-bold text-[10px] border border-red-200 flex items-center gap-1 transition"
-                                    title="ลบพนักงานอย่างถาวร"
-                                  >
-                                    <Trash2 className="w-3 h-3" /> ลบ
-                                  </button>
-                                </div>
-                              </td>
-
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {employees.map((emp) => {
-                      const isPending = emp.isApprovedByAdmin === false;
-                      return (
-                        <div key={emp.id} className="bg-stone-50 border border-stone-200 rounded-2xl p-4 shadow-xs hover:shadow-sm transition flex flex-col justify-between gap-4">
-                          <div className="space-y-3">
-                            <div className="flex items-center gap-3">
-                              <div className="w-12 h-12 rounded-full bg-stone-200 border border-stone-300 overflow-hidden flex items-center justify-center shrink-0">
-                                {emp.profilePhotoURL || emp.profileImage ? (
-                                  <img 
-                                    src={emp.profilePhotoURL || emp.profileImage} 
-                                    alt={emp.name} 
-                                    className="w-full h-full object-cover"
-                                    referrerPolicy="no-referrer"
-                                  />
-                                ) : (
-                                  <Users className="w-5 h-5 text-stone-500" />
-                                )}
-                              </div>
-                              <div className="min-w-0">
-                                <h4 className="font-bold text-stone-900 text-sm truncate">{emp.name}</h4>
-                                {emp.username && (
-                                  <p className="text-[10px] text-stone-500 font-mono truncate">@{emp.username}</p>
-                                )}
-                                <p className="text-[9px] text-stone-400 font-mono truncate">ID: {emp.id}</p>
-                                {emp.plainPin && (
-                                  <p className="text-[10px] text-stone-600 font-mono bg-stone-200/50 px-1.5 py-0.5 rounded w-max mt-1 border border-stone-300/30">
-                                    PIN/รหัส: <span className="font-extrabold text-stone-950">{emp.plainPin}</span>
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-
-                            <div className="border-t border-stone-200/60 pt-2.5 space-y-2 text-xs">
-                              <div className="flex justify-between items-center">
-                                <span className="text-stone-400 text-[10px] font-bold">บทบาท (RBAC)</span>
-                                {isPending ? (
-                                  <span className="text-amber-600 bg-amber-50 px-2 py-0.5 border border-amber-200/50 rounded-md font-bold text-[10px]">
-                                    รอ Admin อนุมัติ
-                                  </span>
-                                ) : (
-                                  <select
-                                    value={emp.role}
-                                    onChange={(e) => handleRoleChange(emp.id, emp.username || "", e.target.value as UserRole)}
-                                    className="bg-white border border-stone-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-stone-950 font-bold text-stone-800 text-[11px]"
-                                  >
-                                    <option value={UserRole.EMPLOYEE}>Employee (พนักงาน)</option>
-                                    <option value={UserRole.MANAGER}>Manager (ผู้จัดการ)</option>
-                                    <option value={UserRole.ACCOUNTANT}>Accountant (นักบัญชี)</option>
-                                    <option value={UserRole.ADMIN}>Admin (ผู้ดูแลระบบ)</option>
-                                  </select>
-                                )}
-                              </div>
-
-                              <div className="bg-white p-2.5 rounded-xl border border-stone-250/60 space-y-1">
-                                <span className="text-[9px] text-stone-400 font-bold uppercase tracking-wider block">ช่องทางรับเงินโอน</span>
-                                <p className="font-bold text-stone-800 text-[11px] truncate">{emp.bankName || "ยังไม่บันทึกธนาคาร"}</p>
-                                {emp.bankNo && <p className="text-[10px] text-stone-600 font-mono truncate">{emp.bankNo}</p>}
-                                {emp.bankAccountName && <p className="text-[9px] text-stone-500 truncate">({emp.bankAccountName})</p>}
-                              </div>
-
-                              <div className="flex justify-between items-center pt-1">
-                                <span className="text-stone-400 text-[10px] font-bold">สถานะบัญชี</span>
-                                <div className="flex items-center gap-1.5 bg-white border border-stone-200 px-2.5 py-1 rounded-full">
-                                  <span
-                                    className={`w-1.5 h-1.5 rounded-full ${
-                                      emp.status === "Active" || emp.isActive !== false
-                                        ? "bg-emerald-500"
-                                        : "bg-red-500"
-                                    }`}
-                                  />
-                                  <span className="font-bold text-[10px] text-stone-700">
-                                    {emp.status || (emp.isActive !== false ? "Active" : "Suspended")}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="pt-3 border-t border-stone-200/60 flex flex-col gap-2 w-full">
-                            <button
-                              onClick={() => startEditEmployee(emp)}
-                              className="w-full py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-xl text-[11px] border border-stone-250 text-center transition"
-                            >
-                              📝 แก้ไขข้อมูลทั้งหมด
-                            </button>
-                            {isPending ? (
-                              <div className="flex justify-end gap-1.5 w-full">
-                                <button
-                                  onClick={() => handleApproveUser(emp, UserRole.EMPLOYEE)}
-                                  disabled={saving}
-                                  className="flex-1 py-1.5 bg-stone-900 hover:bg-stone-800 text-stone-50 font-bold rounded-lg text-[10px] text-center transition"
-                                >
-                                  Employee
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {positions.length === 0 ? (
+                        <div className="col-span-full py-10 text-center text-stone-400 text-xs italic bg-stone-50 rounded-2xl border border-dashed border-stone-200">
+                          ยังไม่ได้กำหนดตำแหน่ง
+                        </div>
+                      ) : (
+                        positions.map((pos, idx) => (
+                          <div key={idx} className="bg-stone-50 border border-stone-200 rounded-xl p-4 flex items-center justify-between group hover:border-indigo-200 transition-colors">
+                            {editingPositionIdx === idx ? (
+                              <div className="flex-1 flex gap-2">
+                                <input
+                                  type="text"
+                                  value={editingPositionText}
+                                  onChange={(e) => setEditingPositionText(e.target.value)}
+                                  className="flex-1 bg-white border border-indigo-300 rounded-lg px-3 py-1.5 text-xs outline-none"
+                                  autoFocus
+                                />
+                                <button onClick={() => handleUpdatePosition(idx)} className="text-emerald-600 hover:text-emerald-700">
+                                  <Check className="w-4 h-4" />
                                 </button>
-                                <button
-                                  onClick={() => handleApproveUser(emp, UserRole.MANAGER)}
-                                  disabled={saving}
-                                  className="flex-1 py-1.5 bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold rounded-lg text-[10px] text-center transition"
-                                >
-                                  Manager
-                                </button>
-                                <button
-                                  onClick={() => handleRejectUser(emp.id)}
-                                  disabled={saving}
-                                  className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition shrink-0"
-                                  title="ปฏิเสธการลงทะเบียน"
-                                >
+                                <button onClick={() => setEditingPositionIdx(null)} className="text-stone-400 hover:text-stone-600">
                                   <X className="w-4 h-4" />
                                 </button>
                               </div>
                             ) : (
-                              <button
-                                onClick={() => handleStatusToggle(emp.id, emp.status || "Active")}
-                                disabled={saving}
-                                className={`w-full py-2 rounded-xl font-bold text-[11px] transition ${
-                                  emp.status === "Active" || emp.isActive !== false
-                                    ? "bg-red-50 hover:bg-red-100 text-red-600 border border-red-200"
-                                    : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200"
-                                }`}
-                              >
-                                {emp.status === "Active" || emp.isActive !== false ? "🔴 ระงับสิทธิ์การใช้งาน" : "🟢 เปิดสิทธิ์การใช้งาน"}
-                              </button>
+                              <>
+                                <span className="text-xs font-bold text-stone-800">{pos}</span>
+                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button
+                                    onClick={() => {
+                                      setEditingPositionIdx(idx);
+                                      setEditingPositionText(pos);
+                                    }}
+                                    className="p-1.5 text-stone-400 hover:text-indigo-600 hover:bg-white rounded-lg transition"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeletePosition(pos)}
+                                    className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-white rounded-lg transition"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </>
                             )}
-                            <button
-                              onClick={() => handleDeleteEmployee(emp.id, emp.name)}
-                              disabled={saving}
-                              className="w-full py-2 bg-red-600 hover:bg-red-750 text-white font-bold rounded-xl text-[11px] transition flex items-center justify-center gap-1.5 shadow-sm"
-                              title="ลบข้อมูลพนักงานถาวร"
-                            >
-                              <Trash2 className="w-4 h-4" /> 🗑️ ลบพนักงานถาวร
-                            </button>
                           </div>
-                        </div>
-                      );
-                    })}
+                        ))
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
             )}
-
             {/* SUB TAB: Projects Administration */}
             {activeSubTab === "projects" && (
               <div className="space-y-6">
@@ -3151,7 +3448,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => handleRemoveProject(proj)}
+                                    onClick={() => setProjectToDelete(proj)}
                                     disabled={saving}
                                     className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition"
                                     title="ลบโครงการ"
@@ -4086,10 +4383,25 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                       </div>
 
                       <div className="p-4 bg-white rounded-xl border border-stone-200 space-y-3">
+                        {(!approvalRules || approvalRules.length === 0 || !approvalRules.some(r => r.isActive)) && (
+                          <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex flex-col gap-2">
+                            <div className="flex items-center gap-2 text-red-600">
+                              <AlertTriangle className="w-4 h-4" />
+                              <p className="text-xs font-bold">ยังไม่มีกฎอนุมัติที่เปิดใช้งาน ระบบจะไม่อนุญาตให้ใครอนุมัติผ่าน LINE LIFF</p>
+                            </div>
+                            <button
+                              onClick={seedDefaultApprovalRules}
+                              className="w-full py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[10px] font-bold transition shadow-sm"
+                            >
+                              เปิดใช้ Default Approval Rules
+                            </button>
+                          </div>
+                        )}
+
                         <div className="flex items-center justify-between gap-3">
                           <div>
-                            <p className="text-xs font-bold text-stone-900">เงื่อนไขผู้มีสิทธิ์อนุมัติหลายระดับ</p>
-                            <p className="text-[10px] text-stone-500">กำหนดช่วงวงเงิน และเลือกตำแหน่งที่สามารถอนุมัติได้ในแต่ละช่วง</p>
+                            <p className="text-xs font-bold text-stone-900">เงื่อนไขผู้มีสิทธิ์อนุมัติหลายระดับ (Position & Role-based Rules)</p>
+                            <p className="text-[10px] text-stone-500">กำหนดช่วงวงเงิน และเลือกตำแหน่งหรือบทบาทพนักงานที่สามารถอนุมัติได้ในแต่ละช่วง</p>
                           </div>
                           <button
                             type="button"
@@ -4100,7 +4412,8 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                                 name: "เงื่อนไขใหม่",
                                 minAmount: 0,
                                 maxAmount: 0,
-                                approverRoles: [UserRole.ADMIN],
+                                approverPositionIds: ["pm"],
+                                approverRoles: [UserRole.MANAGER],
                                 isActive: true,
                               }
                             ])}
@@ -4117,7 +4430,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                                 <th className="px-3 py-2 text-left">ชื่อเงื่อนไข</th>
                                 <th className="px-3 py-2 text-right">ตั้งแต่</th>
                                 <th className="px-3 py-2 text-right">ไม่เกิน</th>
-                                <th className="px-3 py-2 text-left">ตำแหน่งที่อนุมัติได้</th>
+                                <th className="px-3 py-2 text-left">ผู้มีสิทธิ์อนุมัติ</th>
                                 <th className="px-3 py-2 text-center">เปิดใช้</th>
                                 <th className="px-3 py-2 text-center">ลบ</th>
                               </tr>
@@ -4162,25 +4475,53 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                                     />
                                   </td>
                                   <td className="px-3 py-2">
-                                    <div className="flex flex-wrap gap-2">
-                                      {[UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN].map((role) => (
-                                        <label key={role} className="inline-flex items-center gap-1 text-[10px] font-bold text-stone-600">
-                                          <input
-                                            type="checkbox"
-                                            checked={rule.approverRoles.includes(role)}
-                                            onChange={(e) => {
-                                              const roles = e.target.checked
-                                                ? Array.from(new Set([...rule.approverRoles, role]))
-                                                : rule.approverRoles.filter((item) => item !== role);
-                                              const updated = [...approvalRules];
-                                              updated[idx] = { ...rule, approverRoles: roles };
-                                              setApprovalRules(updated);
-                                            }}
-                                            className="rounded text-stone-950 focus:ring-stone-950"
-                                          />
-                                          {role}
-                                        </label>
-                                      ))}
+                                    <div className="space-y-1">
+                                      {/* Positions Selection */}
+                                      <div className="flex flex-wrap gap-1 border-b border-stone-100 pb-1">
+                                        {positions.map((pos) => {
+                                          const posIds = rule.approverPositionIds || [];
+                                          const isChecked = posIds.includes(pos);
+                                          return (
+                                            <label key={pos} className="inline-flex items-center gap-0.5 text-[9px] font-bold text-indigo-700 bg-indigo-50 px-1 py-0.5 rounded">
+                                              <input
+                                                type="checkbox"
+                                                checked={isChecked}
+                                                onChange={(e) => {
+                                                  const newPosIds = e.target.checked
+                                                    ? Array.from(new Set([...posIds, pos]))
+                                                    : posIds.filter((item) => item !== pos);
+                                                  const updated = [...approvalRules];
+                                                  updated[idx] = { ...rule, approverPositionIds: newPosIds };
+                                                  setApprovalRules(updated);
+                                                }}
+                                                className="rounded text-indigo-600 focus:ring-indigo-500 w-3 h-3"
+                                              />
+                                              {pos}
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                      {/* Legacy Roles Selection */}
+                                      <div className="flex flex-wrap gap-1 pt-0.5">
+                                        {[UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN].map((rRole) => (
+                                          <label key={rRole} className="inline-flex items-center gap-0.5 text-[9px] font-bold text-stone-500">
+                                            <input
+                                              type="checkbox"
+                                              checked={(rule.approverRoles || []).includes(rRole)}
+                                              onChange={(e) => {
+                                                const roles = e.target.checked
+                                                  ? Array.from(new Set([...(rule.approverRoles || []), rRole]))
+                                                  : (rule.approverRoles || []).filter((item) => item !== rRole);
+                                                const updated = [...approvalRules];
+                                                updated[idx] = { ...rule, approverRoles: roles };
+                                                setApprovalRules(updated);
+                                              }}
+                                              className="rounded text-stone-900 focus:ring-stone-950 w-3 h-3"
+                                            />
+                                            {rRole}
+                                          </label>
+                                        ))}
+                                      </div>
                                     </div>
                                   </td>
                                   <td className="px-3 py-2 text-center">
@@ -4208,6 +4549,88 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                               ))}
                             </tbody>
                           </table>
+                        </div>
+
+                        {/* Position Permissions Matrix Editor */}
+                        <div className="border-t border-stone-100 pt-6 space-y-4">
+                          <div>
+                            <h4 className="text-[11px] font-black text-stone-900 uppercase tracking-wider flex items-center gap-2">
+                              <ShieldCheck className="w-4 h-4 text-indigo-600" /> ตารางเมทริกซ์สิทธิ์ตามตำแหน่งพนักงาน (Role & Position Permissions Matrix)
+                            </h4>
+                            <p className="text-[10px] text-stone-500">
+                              กำหนดขอบเขตสิทธิ์ของตำแหน่งพนักงานแต่ละขั้นในการใช้ระบบ บันทึกสิทธิ์ลงใน settings/global.rolePermissions
+                            </p>
+                          </div>
+
+                          <div className="overflow-x-auto border border-stone-200 rounded-xl">
+                            <table className="w-full text-xs">
+                              <thead className="bg-stone-50 border-b border-stone-200 text-[9px] text-stone-500 uppercase">
+                                <tr>
+                                  <th className="px-3 py-2 text-left">ตำแหน่ง (Position)</th>
+                                  <th className="px-3 py-2 text-center">ขอเบิกเงิน (canRequest)</th>
+                                  <th className="px-3 py-2 text-center">เคลียร์ยอด (canClear)</th>
+                                  <th className="px-3 py-2 text-center">อนุมัติ (canApprove)</th>
+                                  <th className="px-3 py-2 text-center">ตรวจบัญชี (canAudit)</th>
+                                  <th className="px-3 py-2 text-center">ปิดยอดโอน (canCloseAccount)</th>
+                                  <th className="px-3 py-2 text-center">ดูแดชบอร์ด (canViewDBD)</th>
+                                  <th className="px-3 py-2 text-center">ดูต้นทุนโครงการ (canViewProjectCosts)</th>
+                                  <th className="px-3 py-2 text-center">ผู้ใช้งาน (canManageUsers)</th>
+                                  <th className="px-3 py-2 text-center">ตั้งค่าระบบ (canManageSettings)</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-stone-100">
+                                {Array.from(new Set(["admin", "ceo", "executive", "accounting", "pm", "foreman", "employee", ...positions])).map((pos) => {
+                                  const perms = rolePermissions[pos] || {
+                                    canRequest: false,
+                                    canClear: false,
+                                    canApprove: false,
+                                    canAudit: false,
+                                    canCloseAccount: false,
+                                    canViewDBD: false,
+                                    canViewProjectCosts: false,
+                                    canManageUsers: false,
+                                    canManageSettings: false
+                                  };
+                                  return (
+                                    <tr key={pos} className="hover:bg-stone-50">
+                                      <td className="px-3 py-2 font-bold text-stone-900 capitalize text-left">
+                                        {pos}
+                                      </td>
+                                      {[
+                                        "canRequest",
+                                        "canClear",
+                                        "canApprove",
+                                        "canAudit",
+                                        "canCloseAccount",
+                                        "canViewDBD",
+                                        "canViewProjectCosts",
+                                        "canManageUsers",
+                                        "canManageSettings"
+                                      ].map((action) => (
+                                        <td key={action} className="px-3 py-2 text-center">
+                                          <input
+                                            type="checkbox"
+                                            checked={!!(perms as any)[action]}
+                                            onChange={(e) => {
+                                              const updatedPerms = {
+                                                ...perms,
+                                                [action]: e.target.checked
+                                              };
+                                              setRolePermissions({
+                                                ...rolePermissions,
+                                                [pos]: updatedPerms
+                                              });
+                                            }}
+                                            className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                                          />
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -4870,6 +5293,20 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                   </select>
                 </div>
 
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-stone-500 uppercase tracking-wider block">ตำแหน่ง (Position)</label>
+                  <select
+                    value={editEmpPosition}
+                    onChange={(e) => setEditEmpPosition(e.target.value)}
+                    className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs font-bold text-stone-850 focus:ring-1 focus:ring-stone-950"
+                  >
+                    <option value="">-- ไม่ระบุ --</option>
+                    {positions.map((pos) => (
+                      <option key={pos} value={pos}>{pos}</option>
+                    ))}
+                  </select>
+                </div>
+
                 {/* Status */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-black text-stone-500 uppercase tracking-wider block">สถานะบัญชีการใช้งาน</label>
@@ -5130,6 +5567,85 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                 </div>
               </div>
             </div>
+
+            {/* Reset Data for Production Section */}
+            <div className="bg-white border border-red-200 rounded-2xl shadow-xs p-6 space-y-4">
+              <div className="flex items-center gap-2 border-b border-red-100 pb-3">
+                <Trash2 className="w-5 h-5 text-red-600" />
+                <h4 className="font-bold text-red-900 text-sm">เครื่องมือเตรียมระบบเพื่อขึ้นใช้งานจริง (Production Launch & Reset Tool)</h4>
+              </div>
+              <div className="space-y-4">
+                <p className="text-xs text-stone-600 leading-relaxed">
+                  สำหรับล้างข้อมูลธุรกรรมในการทดสอบทั้งหมด เพื่อเตรียมเริ่มใช้งานจริงของระบบ โดยจะลบเฉพาะรายการเคลื่อนไหว/ธุรกรรมชั่วคราว (ใบขอเบิก, ใบเคลียร์เงิน, รายละเอียดบิลใบเสร็จ, บันทึกบัญชีแยกประเภท GL, ทะเบียนภาษีซื้อ/ภาษี ณ ที่จ่าย, รายงานสรุปต่าง ๆ และข้อมูลไฟล์แนบทั้งหมด)
+                  <strong className="text-red-700 block mt-1.5">⚠️ สำคัญมาก: ข้อมูลโครงการหลัก (เฉพาะชื่อโครงการ งบประมาณ) ข้อมูลบุคลากร/รายชื่อพนักงาน ตลอดจนโครงสร้างสิทธิ์ และหมวดหมู่ต่าง ๆ จะถูกรักษาไว้อย่างปลอดภัยสูงสุด</strong>
+                </p>
+
+                {resetSuccess && (
+                  <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold leading-relaxed">
+                    {resetSuccess}
+                  </div>
+                )}
+
+                {resetError && (
+                  <div className="p-4 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs font-semibold leading-relaxed">
+                    {resetError}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-4 pt-2">
+                  {!showResetModal ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowResetModal(true);
+                        setResetSuccess(null);
+                        setResetError(null);
+                      }}
+                      className="px-5 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-xs hover:shadow-md"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      ล้างข้อมูลธุรกรรมเพื่อเริ่มระบบจริง (Start Production)
+                    </button>
+                  ) : (
+                    <div className="w-full bg-red-50 border border-red-200 rounded-xl p-5 space-y-4">
+                      <h5 className="text-xs font-bold text-red-950 flex items-center gap-2">
+                        ⚠️ ขั้นตอนการยืนยันความปลอดภัยสุดท้าย (พิมพ์ "RESET" เพื่อดำเนินการ)
+                      </h5>
+                      <p className="text-[11px] text-red-700 font-medium">
+                        การล้างข้อมูลธุรกรรมนี้มีผลถาวรต่อฐานข้อมูลในระบบทั้งหมด (จะลบทุกอย่าง ยกเว้นพนักงานและรายชื่อโครงการ) โปรดป้อนคำว่า <span className="font-mono font-black text-xs underline bg-red-100 px-1 py-0.5 rounded text-red-900">RESET</span> เพื่อปลดล็อกปุ่มลบข้อมูล
+                      </p>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <input
+                          type="text"
+                          placeholder="ป้อน RESET"
+                          value={resetConfirmWord}
+                          onChange={(e) => setResetConfirmWord(e.target.value)}
+                          className="px-3.5 py-2 bg-white border border-red-300 rounded-xl text-red-950 focus:outline-none focus:ring-1 focus:ring-red-500 text-xs font-mono font-bold uppercase w-48"
+                        />
+                        <button
+                          type="button"
+                          disabled={resetting || resetConfirmWord !== "RESET"}
+                          onClick={handleResetTransactionsForProduction}
+                          className="px-5 py-2.5 bg-red-600 hover:bg-red-700 disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed text-white font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-sm"
+                        >
+                          {resetting ? "กำลังลบข้อมูลจากระบบ..." : "ยืนยันและดำเนินการลบถาวร"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowResetModal(false);
+                            setResetConfirmWord("");
+                          }}
+                          className="px-4 py-2.5 bg-white border border-stone-200 text-stone-700 font-bold rounded-xl text-xs hover:bg-stone-50 transition cursor-pointer"
+                        >
+                          ยกเลิก
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -5347,51 +5863,409 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                   </div>
                 </div>
 
-                <div className="space-y-4">
-                 <div className="space-y-2">
-                   <label className="text-xs font-bold text-stone-700 block">LINE Channel Access Token</label>
-                   <input
-                      type="text"
-                      placeholder="Paste Channel Access Token here..."
-                      value={lineChannelAccessToken}
-                      onChange={(e) => setLineChannelAccessToken(e.target.value)}
-                      className="w-full max-w-2xl px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
-                   />
-                 </div>
-                 <div className="space-y-2">
-                   <label className="text-xs font-bold text-stone-700 block">LINE Channel Secret</label>
-                   <input
-                      type="password"
-                      placeholder="Paste Channel Secret here..."
-                      value={lineChannelSecret}
-                      onChange={(e) => setLineChannelSecret(e.target.value)}
-                      className="w-full max-w-md px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
-                   />
-                 </div>
-                 <div className="space-y-2">
-                   <label className="text-xs font-bold text-stone-700 block">LINE LIFF ID</label>
-                   <input
-                      type="text"
-                      placeholder="Paste LIFF ID here..."
-                      value={lineLiffId}
-                      onChange={(e) => setLineLiffId(e.target.value)}
-                      className="w-full max-w-md px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
-                   />
-                 </div>
-                 <div className="space-y-2">
-                   <label className="text-xs font-bold text-stone-700 block">LINE Group ID / Room ID</label>
-                   <input
-                      type="text"
-                      placeholder="เช่น Cxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                      value={lineGroupId}
-                      onChange={(e) => setLineGroupId(e.target.value)}
-                      className="w-full max-w-md px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
-                   />
-                   <p className="text-[10px] text-stone-500">
-                     ใช้สำหรับส่งแจ้งเตือนเข้ากลุ่ม LINE กลางเพิ่มเติมจากผู้รับตามบทบาท
-                   </p>
-                 </div>
-               </div>
+                <div className="space-y-8">
+                  {/* A) LINE Official Account */}
+                  <div className="space-y-4 pb-6 border-b border-stone-100">
+                    <div className="flex items-center justify-between">
+                      <h5 className="text-xs font-bold text-stone-800 uppercase bg-stone-100 inline-block px-2 py-1 rounded">A) LINE Official Account</h5>
+                      <button 
+                        type="button" 
+                        onClick={() => setRevealSecrets(!revealSecrets)}
+                        className="text-[10px] font-bold text-stone-500 hover:text-stone-900 flex items-center gap-1"
+                      >
+                        {revealSecrets ? <X className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                        {revealSecrets ? "ซ่อนข้อมูลลับ" : "แสดงข้อมูลลับ"}
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-stone-700 block">Channel Access Token</label>
+                      <input
+                        type={revealSecrets ? "text" : "password"}
+                        placeholder="Paste Channel Access Token here..."
+                        value={lineChannelAccessToken}
+                        onChange={(e) => setLineChannelAccessToken(e.target.value)}
+                        className="w-full max-w-2xl px-3.5 py-2.5 bg-white border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-stone-700 block">Channel Secret</label>
+                      <input
+                        type={revealSecrets ? "text" : "password"}
+                        placeholder="Paste Channel Secret here..."
+                        value={lineChannelSecret}
+                        onChange={(e) => setLineChannelSecret(e.target.value)}
+                        className="w-full max-w-md px-3.5 py-2.5 bg-white border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-stone-700 block">Webhook URL (Read Only)</label>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={`${window.location.origin}/api/line/webhook`}
+                          className="flex-1 min-w-[300px] max-w-md px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-500 focus:outline-none text-xs font-mono"
+                        />
+                        <button type="button" onClick={() => navigator.clipboard.writeText(`${window.location.origin}/api/line/webhook`)} className="px-4 py-2.5 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-bold rounded-xl transition">คัดลอก URL</button>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 pt-2">
+                      <button type="button" onClick={async () => {
+                        try {
+                          const res = await fetch('/api/line/test-notification', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ triggerId: 'none' })
+                          });
+                          const data = await res.json();
+                          alert(JSON.stringify(data, null, 2));
+                        } catch (err) { alert(err); }
+                      }} className="px-4 py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-xs font-bold transition">ทดสอบเชื่อมต่อ (Test Bot Connection)</button>
+                    </div>
+                  </div>
+
+                  {/* B) LIFF Settings */}
+                  <div className="space-y-4 pb-6 border-b border-stone-100">
+                    <div className="flex items-center justify-between">
+                      <h5 className="text-xs font-bold text-stone-800 uppercase bg-stone-100 inline-block px-2 py-1 rounded">B) LIFF Settings</h5>
+                      {showSyncWarning && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-red-600 animate-pulse">พบ LINE config เก่าไม่ตรงกัน</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm(`ต้องการซิงค์ค่า LIFF ID เก่า (${oldLiffId}) ให้เป็นค่าใหม่ (${lineLiffId}) ใช่หรือไม่?`)) {
+                                handleSaveLineSettings();
+                              }
+                            }}
+                            className="px-2 py-1 bg-red-100 hover:bg-red-200 text-red-700 rounded text-[9px] font-bold border border-red-200 transition"
+                          >
+                            Sync/Cleanup
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-stone-700 block">App Base URL</label>
+                          <input
+                            type="text"
+                            placeholder="เช่น https://your-app-domain.run.app"
+                            value={lineAppBaseUrl}
+                            onChange={(e) => setLineAppBaseUrl(e.target.value)}
+                            className="w-full px-3.5 py-2.5 bg-white border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
+                          />
+                          <p className="text-[10px] text-stone-500 leading-normal">
+                            ระบุ Domain หลักของระบบ เช่น <code>https://xxxxx.run.app</code> เพื่อสร้าง URL ต่างๆ
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-stone-700 block">LIFF ID</label>
+                          <input
+                            type="text"
+                            placeholder="เช่น 2010571826-xxxxxxxx"
+                            value={lineLiffId}
+                            onChange={(e) => setLineLiffId(e.target.value)}
+                            className="w-full px-3.5 py-2.5 bg-white border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
+                          />
+                          <p className="text-[10px] text-stone-500 leading-normal">
+                            LIFF ID ของ LINE Front-end Framework สำหรับพนักงานในระบบ
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="bg-stone-50 border border-stone-200 rounded-2xl p-5 space-y-4">
+                        <h6 className="text-xs font-bold text-stone-800 flex items-center gap-1.5 pb-2 border-b border-stone-250">
+                          🔗 รายการ URL และเทมเพลตสำหรับตั้งค่าใน LINE
+                        </h6>
+                        
+                        <div className="space-y-4">
+                          {(() => {
+                            const resolveTestUrl = (template: string, liffId: string) => {
+                              const cleanLiffId = (liffId || "").trim();
+                              const testAdvId = "ADV-2607-029";
+                              const todayDate = new Date().toISOString().split('T')[0];
+                              return template
+                                .replace(/\{LIFF_ID\}/g, cleanLiffId)
+                                .replace(/\{liffId\}/g, cleanLiffId)
+                                .replace(/\{advId\}/g, testAdvId)
+                                .replace(/\{id\}/g, testAdvId)
+                                .replace(/\{date\}/g, todayDate);
+                            };
+                            return [
+                              {
+                                label: "1. Webhook URL (Read-only ในระบบ)",
+                                value: `${lineAppBaseUrl || window.location.origin}/api/line/webhook`
+                              },
+                              {
+                                label: "2. LIFF Endpoint URL (สำหรับกรอกใน LINE Console)",
+                                value: lineAppBaseUrl || window.location.origin
+                              },
+                              {
+                                label: "3. LIFF Base URL",
+                                value: `https://liff.line.me/${lineLiffId || "{LIFF_ID}"}`
+                              },
+                              {
+                                label: "4. ลิงก์ อนุมัติ (Approve Link Template)",
+                                value: `https://liff.line.me/${lineLiffId || "{LIFF_ID}"}?route=action&action=approve&adv_id={advId}`,
+                                testUrl: resolveTestUrl(`https://liff.line.me/{LIFF_ID}?route=action&action=approve&adv_id={advId}`, lineLiffId)
+                              },
+                              {
+                                label: "5. ลิงก์ ไม่อนุมัติ (Reject Link Template)",
+                                value: `https://liff.line.me/${lineLiffId || "{LIFF_ID}"}?route=action&action=reject&adv_id={advId}`,
+                                testUrl: resolveTestUrl(`https://liff.line.me/{LIFF_ID}?route=action&action=reject&adv_id={advId}`, lineLiffId)
+                              },
+                              {
+                                label: "6. ลิงก์ แนบสลิป (Upload Slip Link Template)",
+                                value: `https://liff.line.me/${lineLiffId || "{LIFF_ID}"}?route=upload-slip&adv_id={advId}`,
+                                testUrl: resolveTestUrl(`https://liff.line.me/{LIFF_ID}?route=upload-slip&adv_id={advId}`, lineLiffId)
+                              },
+                              {
+                                label: "7. ลิงก์ ดูเอกสาร (View Document Link Template)",
+                                value: `https://liff.line.me/${lineLiffId || "{LIFF_ID}"}?route=document&adv_id={advId}`,
+                                testUrl: resolveTestUrl(`https://liff.line.me/{LIFF_ID}?route=document&adv_id={advId}`, lineLiffId)
+                              },
+                              {
+                                label: "8. ลิงก์ รายงานประจำวัน (Daily Report Link Template)",
+                                value: `https://liff.line.me/${lineLiffId || "{LIFF_ID}"}?route=daily-report&date={date}`,
+                                testUrl: resolveTestUrl(`https://liff.line.me/{LIFF_ID}?route=daily-report&date={date}`, lineLiffId)
+                              }
+                            ];
+                          })().map((item, idx) => (
+                            <div key={idx} className="space-y-1.5 border-b border-stone-200/65 pb-3 last:border-0 last:pb-0">
+                              <div className="flex justify-between items-center">
+                                <span className="text-[11px] font-bold text-stone-700">{item.label}</span>
+                                {item.testUrl && (
+                                  <span className="text-[9px] font-medium text-stone-400 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded font-mono">
+                                    Mock: ADV-2607-029
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="text"
+                                  readOnly
+                                  value={item.value}
+                                  className="flex-1 px-3 py-2 bg-stone-100/60 border border-stone-200 rounded-xl text-stone-600 focus:outline-none text-[11px] font-mono select-all"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(item.value);
+                                    alert(`คัดลอกลิงก์สำเร็จ!`);
+                                  }}
+                                  className="p-2 bg-white border border-stone-200 hover:bg-stone-50 text-stone-700 hover:text-stone-900 rounded-xl transition"
+                                  title="คัดลอกลิงก์"
+                                >
+                                  <Copy className="w-3.5 h-3.5" />
+                                </button>
+                                {item.testUrl && (
+                                  <a
+                                    href={lineLiffId ? item.testUrl : "#"}
+                                    target={lineLiffId ? "_blank" : "_self"}
+                                    rel="noreferrer"
+                                    onClick={(e) => {
+                                      if (!lineLiffId) {
+                                        e.preventDefault();
+                                        alert("กรุณาระบุ LIFF ID ก่อนทำการทดสอบ");
+                                      }
+                                    }}
+                                    className="p-2 bg-stone-900 hover:bg-stone-850 text-white rounded-xl transition flex items-center justify-center"
+                                    title="เปิดทดสอบใน Tab ใหม่"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                  </a>
+                                )}
+                                {item.testUrl && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (!lineLiffId) {
+                                        alert("กรุณาระบุ LIFF ID ก่อนสร้าง QR Code");
+                                        return;
+                                      }
+                                      setActiveQrUrl(item.testUrl || null);
+                                      setActiveQrLabel(item.label);
+                                    }}
+                                    className="p-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 rounded-xl transition flex items-center justify-center"
+                                    title="สร้าง QR Code"
+                                  >
+                                    <Grid className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {activeQrUrl && (
+                        <div className="bg-emerald-50/50 border border-emerald-200 rounded-2xl p-4 flex flex-col items-center justify-center text-center space-y-2 animate-fade-in relative">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveQrUrl(null);
+                              setActiveQrLabel(null);
+                            }}
+                            className="absolute top-3 right-3 text-emerald-700 hover:text-emerald-950 p-1 bg-emerald-100 rounded-full flex items-center justify-center"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                          <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded">
+                            QR Code: {activeQrLabel}
+                          </span>
+                          <img
+                            src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(activeQrUrl)}`}
+                            alt="QR Code"
+                            className="w-32 h-32 bg-white border border-emerald-200 rounded-xl p-1.5"
+                          />
+                          <p className="text-[10px] text-emerald-700 font-mono break-all max-w-sm">
+                            {activeQrUrl}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* C) LINE Group Settings */}
+                  <div className="space-y-4">
+                    <h5 className="text-xs font-bold text-stone-800 uppercase bg-stone-100 inline-block px-2 py-1 rounded">C) LINE Group Settings</h5>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-stone-700 block">Group ID / Room ID</label>
+                      <input
+                        type="text"
+                        placeholder="เช่น Cxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                        value={lineGroupId}
+                        onChange={(e) => setLineGroupId(e.target.value)}
+                        className="w-full max-w-md px-3.5 py-2.5 bg-white border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-stone-700 block">ชื่อกลุ่ม (Group Name)</label>
+                      <input
+                        type="text"
+                        placeholder="เช่น กลุ่มบริหารจัดการ"
+                        value={lineGroupName}
+                        onChange={(e) => setLineGroupName(e.target.value)}
+                        className="w-full max-w-md px-3.5 py-2.5 bg-white border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-1 focus:ring-stone-950 text-xs font-mono"
+                      />
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer mt-2">
+                      <input 
+                        type="checkbox" 
+                        checked={lineEnableGroupNotification}
+                        onChange={(e) => setLineEnableGroupNotification(e.target.checked)}
+                        className="w-4 h-4 rounded text-stone-950 border-stone-300 focus:ring-stone-950" 
+                      />
+                      <span className="text-xs font-bold text-stone-700">เปิดใช้งานแจ้งเตือนเข้ากลุ่ม (Enable Group Notification)</span>
+                    </label>
+                    <div className="flex gap-2 pt-2">
+                      <button type="button" onClick={async () => {
+                        try {
+                          const res = await fetch('/api/line/test-notification', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ triggerId: 'none', sendToGroup: true })
+                          });
+                          const data = await res.json();
+                          alert(JSON.stringify(data, null, 2));
+                        } catch (err) { alert(err); }
+                      }} className="px-4 py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-xs font-bold transition">ทดสอบส่งเข้ากลุ่ม (Test Send to Group)</button>
+                    </div>
+                  </div>
+
+                  {/* D) Scheduled Reports */}
+                  <div className="space-y-4 pb-6 border-b border-stone-100">
+                    <h5 className="text-xs font-bold text-stone-800 uppercase bg-stone-100 inline-block px-2 py-1 rounded">D) Scheduled Reports (สรุปยอดอัตโนมัติ)</h5>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-3 bg-white p-4 border border-stone-200 rounded-xl">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input 
+                            type="checkbox" 
+                            checked={lineDailyReportEnabled}
+                            onChange={(e) => setLineDailyReportEnabled(e.target.checked)}
+                            className="w-4 h-4 rounded text-stone-950 border-stone-300 focus:ring-stone-950" 
+                          />
+                          <span className="text-xs font-bold text-stone-800">สรุปยอดประจำวัน (Daily)</span>
+                        </label>
+                        {lineDailyReportEnabled && (
+                          <div className="space-y-1 pl-6">
+                            <label className="text-[10px] font-bold text-stone-500 block">เวลาที่ส่ง (เช่น 17:30)</label>
+                            <input
+                              type="time"
+                              value={lineDailyReportTime}
+                              onChange={(e) => setLineDailyReportTime(e.target.value)}
+                              className="w-full max-w-[150px] px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-lg text-xs font-mono"
+                            />
+                          </div>
+                        )}
+                        <div className="pl-6 pt-2">
+                           <button type="button" onClick={async () => {
+                             try {
+                               const res = await fetch('/api/line/test-notification', {
+                                 method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                 body: JSON.stringify({ triggerId: 'dailyReport' })
+                               });
+                               const data = await res.json();
+                               alert(JSON.stringify(data, null, 2));
+                             } catch (err) { alert(err); }
+                           }} className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[10px] font-bold transition">ทดสอบ Daily Report</button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 bg-white p-4 border border-stone-200 rounded-xl">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input 
+                            type="checkbox" 
+                            checked={lineWeeklyReportEnabled}
+                            onChange={(e) => setLineWeeklyReportEnabled(e.target.checked)}
+                            className="w-4 h-4 rounded text-stone-950 border-stone-300 focus:ring-stone-950" 
+                          />
+                          <span className="text-xs font-bold text-stone-800">สรุปยอดประจำสัปดาห์ (Weekly)</span>
+                        </label>
+                        {lineWeeklyReportEnabled && (
+                          <div className="flex gap-2 pl-6">
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-stone-500 block">วันในสัปดาห์</label>
+                              <select 
+                                value={lineWeeklyReportDay}
+                                onChange={(e) => setLineWeeklyReportDay(e.target.value)}
+                                className="w-full max-w-[100px] px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-lg text-xs"
+                              >
+                                <option value="1">จันทร์</option>
+                                <option value="2">อังคาร</option>
+                                <option value="3">พุธ</option>
+                                <option value="4">พฤหัสบดี</option>
+                                <option value="5">ศุกร์</option>
+                              </select>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-stone-500 block">เวลา</label>
+                              <input
+                                type="time"
+                                value={lineWeeklyReportTime}
+                                onChange={(e) => setLineWeeklyReportTime(e.target.value)}
+                                className="w-full max-w-[120px] px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-lg text-xs font-mono"
+                              />
+                            </div>
+                          </div>
+                        )}
+                        <div className="pl-6 pt-2">
+                           <button type="button" onClick={async () => {
+                             try {
+                               const res = await fetch('/api/line/test-notification', {
+                                 method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                 body: JSON.stringify({ triggerId: 'weeklyReport' })
+                               });
+                               const data = await res.json();
+                               alert(JSON.stringify(data, null, 2));
+                             } catch (err) { alert(err); }
+                           }} className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[10px] font-bold transition">ทดสอบ Weekly Report</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
                
                 <div className="pt-4 border-t border-stone-100 space-y-4">
                   <h4 className="text-xs font-bold text-stone-800 uppercase tracking-wider mb-2">รูปแบบข้อความแจ้งเตือน (Notification Triggers)</h4>
@@ -5450,6 +6324,31 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                                 </button>
                               </div>
                             </div>
+
+                            {/* Placeholder Warning */}
+                            {trigger.isActive && (/\{id\}/i.test(trigger.messageTemplate || "") || /\{LIFF_ID\}/i.test(trigger.messageTemplate || "")) && (
+                              <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 flex items-start gap-2 animate-pulse">
+                                <span className="text-amber-600">⚠️</span>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[10px] font-bold text-amber-800">พบตัวแปร {`{id}`} หรือ {`{LIFF_ID}`} ที่เลิกใช้แล้ว</p>
+                                  <p className="text-[9px] text-amber-700">กรุณาใช้ {`{advId}`} และ {`{liffId}`} แทนเพื่อป้องกัน Error "The string did not match the expected pattern"</p>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = [...lineTriggers];
+                                      updated[idx].messageTemplate = (updated[idx].messageTemplate || "")
+                                        .replace(/\{id\}/gi, "{advId}")
+                                        .replace(/\{LIFF_ID\}/gi, "{liffId}");
+                                      setLineTriggers(updated);
+                                    }}
+                                    className="mt-1 px-2 py-0.5 bg-amber-200 hover:bg-amber-300 text-amber-900 rounded text-[9px] font-bold transition"
+                                  >
+                                    แก้ไขให้อัตโนมัติ
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                               <div className="space-y-1">
                                 <label className="text-[10px] font-bold text-stone-500">Alt text</label>
@@ -5471,7 +6370,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                                   value={trigger.recipientMode || "target"}
                                   onChange={(e) => {
                                     const updated = [...lineTriggers];
-                                    updated[idx].recipientMode = e.target.value as LineMessageTrigger["recipientMode"];
+                                    updated[idx].recipientMode = e.target.value as LineTrigger["recipientMode"];
                                     setLineTriggers(updated);
                                   }}
                                   className="w-full text-xs bg-white border border-stone-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-stone-950"
@@ -5484,26 +6383,86 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                                 </select>
                               </div>
                             </div>
-                            <div className="flex flex-wrap gap-2">
-                              {[UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN].map((role) => (
-                                <label key={role} className="inline-flex items-center gap-1 text-[10px] font-bold text-stone-600 bg-white border border-stone-200 rounded-lg px-2 py-1">
-                                  <input
-                                    type="checkbox"
-                                    checked={(trigger.recipientRoles || []).includes(role)}
-                                    onChange={(e) => {
-                                      const updated = [...lineTriggers];
-                                      const roles = new Set(updated[idx].recipientRoles || []);
-                                      if (e.target.checked) roles.add(role);
-                                      else roles.delete(role);
-                                      updated[idx].recipientRoles = Array.from(roles);
-                                      setLineTriggers(updated);
-                                    }}
-                                    className="w-3 h-3 rounded border-stone-300"
-                                  />
-                                  {role}
-                                </label>
-                              ))}
+                            <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2">
+                              <label className="inline-flex items-center gap-1 text-[10px] font-bold text-stone-700">
+                                <input type="checkbox" checked={trigger.sendToGroup} onChange={(e) => {
+                                  const updated = [...lineTriggers];
+                                  updated[idx].sendToGroup = e.target.checked;
+                                  setLineTriggers(updated);
+                                }} className="w-3 h-3 rounded border-stone-300" />
+                                Send to Group
+                              </label>
+                              <label className="inline-flex items-center gap-1 text-[10px] font-bold text-stone-700">
+                                <input type="checkbox" checked={trigger.sendToUsers} onChange={(e) => {
+                                  const updated = [...lineTriggers];
+                                  updated[idx].sendToUsers = e.target.checked;
+                                  setLineTriggers(updated);
+                                }} className="w-3 h-3 rounded border-stone-300" />
+                                Send to Users
+                              </label>
+                              <label className="inline-flex items-center gap-1 text-[10px] font-bold text-stone-700">
+                                <input type="checkbox" checked={trigger.alsoSendToRequester} onChange={(e) => {
+                                  const updated = [...lineTriggers];
+                                  updated[idx].alsoSendToRequester = e.target.checked;
+                                  setLineTriggers(updated);
+                                }} className="w-3 h-3 rounded border-stone-300" />
+                                + Requester
+                              </label>
+                              <label className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-600">
+                                <input type="checkbox" checked={trigger.useApprovalWorkflowRules} onChange={(e) => {
+                                  const updated = [...lineTriggers];
+                                  updated[idx].useApprovalWorkflowRules = e.target.checked;
+                                  setLineTriggers(updated);
+                                }} className="w-3 h-3 rounded border-stone-300" />
+                                Use Workflow Rules
+                              </label>
+                              <label className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-600">
+                                <input type="checkbox" checked={trigger.includeLiffActions} onChange={(e) => {
+                                  const updated = [...lineTriggers];
+                                  updated[idx].includeLiffActions = e.target.checked;
+                                  setLineTriggers(updated);
+                                }} className="w-3 h-3 rounded border-stone-300" />
+                                Include LIFF Actions
+                              </label>
+                              {trigger.includeLiffActions && (
+                                <select
+                                  value={trigger.liffActionMode || "none"}
+                                  onChange={(e) => {
+                                    const updated = [...lineTriggers];
+                                    updated[idx].liffActionMode = e.target.value as any;
+                                    setLineTriggers(updated);
+                                  }}
+                                  className="text-[10px] bg-white border border-stone-200 rounded px-1 py-0.5 focus:outline-none"
+                                >
+                                  <option value="none">No Buttons</option>
+                                  <option value="approveReject">Approve / Reject</option>
+                                  <option value="uploadSlip">Upload Slip</option>
+                                  <option value="viewOnly">View Only</option>
+                                </select>
+                              )}
                             </div>
+                            {trigger.recipientMode === "approvers" && !trigger.useApprovalWorkflowRules && (
+                              <div className="flex flex-wrap gap-2">
+                                {[UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.ADMIN].map((role) => (
+                                  <label key={role} className="inline-flex items-center gap-1 text-[10px] font-bold text-stone-600 bg-white border border-stone-200 rounded-lg px-2 py-1">
+                                    <input
+                                      type="checkbox"
+                                      checked={(trigger.recipientRoles || []).includes(role)}
+                                      onChange={(e) => {
+                                        const updated = [...lineTriggers];
+                                        const roles = new Set(updated[idx].recipientRoles || []);
+                                        if (e.target.checked) roles.add(role);
+                                        else roles.delete(role);
+                                        updated[idx].recipientRoles = Array.from(roles);
+                                        setLineTriggers(updated);
+                                      }}
+                                      className="w-3 h-3 rounded border-stone-300"
+                                    />
+                                    {role}
+                                  </label>
+                                ))}
+                              </div>
+                            )}
                             <textarea
                               value={trigger.messageTemplate}
                               placeholder={trigger.type === "flex" ? "Paste Flex Message JSON here..." : "Type message template here..."}
@@ -5519,8 +6478,24 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                           <div className="flex flex-col gap-1 items-end shrink-0">
                             <button
                               type="button"
+                              onClick={async () => {
+                                try {
+                                  const res = await fetch('/api/line/test-notification', {
+                                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ triggerId: trigger.id })
+                                  });
+                                  const data = await res.json();
+                                  alert("Test Result:\n" + JSON.stringify(data, null, 2));
+                                } catch (err) { alert(err); }
+                              }}
+                              className="text-[10px] font-bold px-2 py-1 rounded bg-stone-900 text-white hover:bg-stone-800"
+                            >
+                              Test
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => setPreviewTriggerId(trigger.id)}
-                              className={`text-[10px] font-bold px-2 py-1 rounded ${previewTriggerId === trigger.id ? "bg-stone-900 text-white" : "bg-stone-200 text-stone-600 hover:bg-stone-300"}`}
+                              className={`text-[10px] font-bold px-2 py-1 rounded mt-1 ${previewTriggerId === trigger.id ? "bg-stone-600 text-white" : "bg-stone-200 text-stone-600 hover:bg-stone-300"}`}
                             >
                               Preview
                             </button>
@@ -5582,7 +6557,7 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                       type="button"
                       onClick={() => {
                         if (!newLineTriggerName.trim() || !newLineTriggerTemplate.trim()) return;
-                        const newTrigger: LineMessageTrigger = {
+                        const newTrigger: LineTrigger = {
                           id: `trigger_${Date.now()}`,
                           name: newLineTriggerName.trim(),
                           isActive: true,
@@ -5601,61 +6576,470 @@ export default function AdminSettings({ currentEmployee }: AdminSettingsProps) {
                </div>
             </div>
 
-            {/* Mobile Mockup */}
-            <div className="flex justify-center items-start pt-6">
+            {/* Mobile Mockup with LIFF Interactive Preview */}
+            <div className="flex flex-col items-center gap-4 pt-6 shrink-0">
+              {/* View Mode Toggle */}
+              <div className="flex bg-stone-100 p-1 rounded-2xl border border-stone-200 shadow-xs">
+                <button
+                  type="button"
+                  onClick={() => setPhoneViewMode("chat")}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1 ${phoneViewMode === "chat" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`}
+                >
+                  💬 แชท LINE
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPhoneViewMode("liff_action")}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1 ${phoneViewMode === "liff_action" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`}
+                >
+                  🛡️ LIFF อนุมัติ
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPhoneViewMode("liff_slip")}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1 ${phoneViewMode === "liff_slip" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`}
+                >
+                  📎 LIFF แนบสลิป
+                </button>
+              </div>
+
               <div className="w-[300px] h-[600px] bg-stone-900 rounded-[40px] p-3 shadow-2xl relative border-[6px] border-stone-800">
                 {/* Notch */}
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-stone-800 rounded-b-xl z-10"></div>
-                {/* Screen */}
-                <div className="bg-[#849ebf] w-full h-full rounded-[30px] overflow-hidden flex flex-col relative">
-                  {/* Header */}
-                  <div className="bg-[#2c3e50] h-14 flex items-center px-4 text-white font-semibold pt-2">
-                     <div className="w-8 h-8 bg-stone-200 rounded-full flex items-center justify-center text-[#2c3e50] mr-2 shrink-0 overflow-hidden">
-                       <img src="https://upload.wikimedia.org/wikipedia/commons/4/41/LINE_logo.svg" alt="LINE" className="w-full h-full object-cover" />
-                     </div>
-                     <span className="truncate">Constructech Bot</span>
-                  </div>
-                  {/* Chat Area */}
-                  <div className="flex-1 p-4 overflow-y-auto space-y-4 pt-6">
-                    <div className="text-center text-[10px] text-white/70 mb-4 bg-black/20 rounded-full px-2 py-0.5 w-fit mx-auto">Today</div>
-                    
-                    {/* Preview Message */}
-                    {getPreviewTrigger() && (
-                      <div className="flex items-start">
-                        <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center mr-2 shrink-0 overflow-hidden">
-                          <img src="https://upload.wikimedia.org/wikipedia/commons/4/41/LINE_logo.svg" alt="LINE" className="w-full h-full object-cover" />
-                        </div>
-                        {getPreviewTrigger()?.type === "flex" ? (
-                          (() => {
-                            const parsed = parseFlexPreview(getPreviewTrigger()?.messageTemplate || "");
-                            return parsed.error ? (
-                              <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-2xl rounded-tl-sm max-w-[85%] text-[11px] font-bold">
-                                JSON Flex Message ไม่ถูกต้อง: {parsed.error}
-                              </div>
-                            ) : (
-                              renderFlexPreview(parsed.value)
-                            );
-                          })()
-                        ) : (
-                          <div className="bg-white text-[#333333] p-3 rounded-2xl rounded-tl-sm shadow-sm max-w-[80%] text-xs whitespace-pre-wrap leading-relaxed relative">
-                             {replaceLineVariables(getPreviewTrigger()?.messageTemplate || "")}
-                             <div className="absolute right-[-30px] bottom-0 text-[9px] text-white/70">10:42</div>
+                
+                {/* Screen Content */}
+                {phoneViewMode === "chat" ? (
+                  <div className="bg-[#849ebf] w-full h-full rounded-[30px] overflow-hidden flex flex-col relative">
+                    {/* Header */}
+                    <div className="bg-[#2c3e50] h-14 flex items-center px-4 text-white font-semibold pt-2">
+                       <div className="w-8 h-8 bg-stone-200 rounded-full flex items-center justify-center text-[#2c3e50] mr-2 shrink-0 overflow-hidden">
+                         <img src="https://upload.wikimedia.org/wikipedia/commons/4/41/LINE_logo.svg" alt="LINE" className="w-full h-full object-cover" />
+                       </div>
+                       <span className="truncate text-xs">Constructech Bot</span>
+                    </div>
+                    {/* Chat Area */}
+                    <div className="flex-1 p-4 overflow-y-auto space-y-4 pt-6">
+                      <div className="text-center text-[10px] text-white/70 mb-4 bg-black/20 rounded-full px-2 py-0.5 w-fit mx-auto">Today</div>
+                      
+                      {/* Preview Message */}
+                      {getPreviewTrigger() && (
+                        <div className="flex items-start">
+                          <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center mr-2 shrink-0 overflow-hidden">
+                            <img src="https://upload.wikimedia.org/wikipedia/commons/4/41/LINE_logo.svg" alt="LINE" className="w-full h-full object-cover" />
                           </div>
-                        )}
+                          {getPreviewTrigger()?.type === "flex" ? (
+                            (() => {
+                              const parsed = parseFlexPreview(getPreviewTrigger()?.messageTemplate || "");
+                              return parsed.error ? (
+                                <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-2xl rounded-tl-sm max-w-[85%] text-[11px] font-bold">
+                                  JSON Flex Message ไม่ถูกต้อง: {parsed.error}
+                                </div>
+                              ) : (
+                                renderFlexPreview(parsed.value)
+                              );
+                            })()
+                          ) : (
+                            <div className="bg-white text-[#333333] p-3 rounded-2xl rounded-tl-sm shadow-sm max-w-[80%] text-xs whitespace-pre-wrap leading-relaxed relative">
+                               {replaceLineVariables(getPreviewTrigger()?.messageTemplate || "")}
+                               <div className="absolute right-[-30px] bottom-0 text-[9px] text-white/70">10:42</div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {!getPreviewTrigger() && (
+                        <div className="text-center text-xs text-white/70 italic mt-10">กรุณาเลือก Preview รูปแบบข้อความ</div>
+                      )}
+                    </div>
+                    {/* Input area */}
+                    <div className="bg-white h-12 flex items-center px-3 border-t border-stone-200">
+                      <div className="w-6 h-6 rounded-full border-2 border-stone-300 mr-2"></div>
+                      <div className="flex-1 bg-stone-100 h-8 rounded-full"></div>
+                    </div>
+                  </div>
+                ) : phoneViewMode === "liff_action" ? (
+                  // LIFF ACTION SCREEN
+                  <div className="bg-stone-50 w-full h-full rounded-[30px] overflow-hidden flex flex-col relative text-stone-900 font-sans">
+                    {/* LIFF Header */}
+                    <div className="bg-white border-b border-stone-200 h-14 flex items-center justify-between px-4 pt-2 shrink-0">
+                      <div className="min-w-0">
+                        <p className="text-[9px] text-stone-500 font-semibold tracking-wider">LINE LIFF</p>
+                        <h4 className="text-xs font-bold text-stone-900 truncate">
+                          {mockLiffActionType === "clearance" ? "อนุมัติเคลียร์ยอด" : "อนุมัติรายการเบิก"}
+                        </h4>
                       </div>
-                    )}
-                    {!getPreviewTrigger() && (
-                      <div className="text-center text-xs text-white/70 italic mt-10">กรุณาเลือก Preview รูปแบบข้อความ</div>
-                    )}
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          setMockLiffActionState("pending");
+                          setMockLiffActionType(mockLiffActionType === "advance" ? "clearance" : "advance");
+                        }}
+                        className="text-[9px] font-bold bg-stone-100 hover:bg-stone-200 text-stone-700 px-1.5 py-0.5 rounded transition"
+                        title="สลับประเภทใบเบิก"
+                      >
+                        สลับประเภท
+                      </button>
+                    </div>
+
+                    {/* LIFF Scrollable Content */}
+                    <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+                      {/* Document Overview */}
+                      <div className="bg-white border border-stone-200 rounded-xl p-3 shadow-xs space-y-2.5">
+                        <div className="flex items-start gap-2">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${mockLiffActionState === "rejected" ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600"}`}>
+                            {mockLiffActionState === "rejected" ? <X size={16} /> : <ShieldCheck size={16} />}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[9px] text-stone-500">เลขที่ใบเบิก</p>
+                            <h5 className="font-mono text-xs font-bold text-stone-900 truncate">ADV-2607-0018</h5>
+                            <p className="text-[10px] text-stone-500 mt-0.5">ผู้ขอเบิก: นายสมชาย มีทอง</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-[10px] border-t border-stone-100 pt-2">
+                          <div className="bg-stone-50 rounded-lg p-2">
+                            <p className="text-stone-500 text-[8px]">ยอดเงินเบิก</p>
+                            <p className="font-bold text-stone-900">฿12,500.00</p>
+                          </div>
+                          <div className="bg-stone-50 rounded-lg p-2">
+                            <p className="text-stone-500 text-[8px]">สถานะ</p>
+                            <p className="font-bold text-stone-900">
+                              {mockLiffActionState === "pending" 
+                                ? (mockLiffActionType === "clearance" ? "WAITING_CLEARANCE" : "PENDING_APPROVAL")
+                                : mockLiffActionState === "approved" 
+                                  ? (mockLiffActionType === "clearance" ? "CLOSED" : "WAITING_TRANSFER")
+                                  : (mockLiffActionType === "clearance" ? "RETURNED" : "REJECTED")
+                              }
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="text-[9px] space-y-1 pt-1">
+                          <div className="flex justify-between"><span className="text-stone-500">โครงการ:</span> <span className="font-semibold text-stone-900 truncate max-w-[130px]">ปรับปรุงออฟฟิศพญาไท</span></div>
+                          <div className="flex justify-between"><span className="text-stone-500">หมวดหมู่:</span> <span className="font-semibold text-stone-900">ค่าอุปกรณ์ปรับปรุง</span></div>
+                        </div>
+                      </div>
+
+                      {mockLiffActionType === "clearance" && (
+                        <div className="bg-white border border-stone-200 rounded-xl p-3 shadow-xs space-y-2">
+                          <h6 className="font-bold text-[9px] text-stone-800 border-b border-stone-100 pb-1 flex justify-between">
+                            <span>ใบเสร็จส่งเคลียร์ (1 รายการ)</span>
+                            <span className="text-emerald-600 font-extrabold">ใช้จริง ฿11,850.00</span>
+                          </h6>
+                          <div className="text-[9px] flex justify-between">
+                            <span className="text-stone-500">ไทวัสดุ สาขาบางนา</span>
+                            <span className="font-bold">฿11,850.00</span>
+                          </div>
+                          <div className="bg-emerald-50 text-emerald-800 text-[8px] p-1.5 rounded-lg font-bold flex justify-between">
+                            <span>เงินคืนบริษัท:</span>
+                            <span>฿650.00</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {mockLiffActionState === "pending" ? (
+                        <div className="bg-white border border-stone-200 rounded-xl p-3 shadow-xs space-y-3">
+                          <p className="text-[10px] text-stone-600 leading-relaxed text-center">
+                            {mockLiffActionType === "clearance" 
+                              ? "กรุณาตรวจสอบเอกสารเคลียร์ยอดและเลือกดำเนินการ"
+                              : "กรุณาเลือก อนุมัติ หรือ ไม่อนุมัติ รายการใบเบิกเงินทดรองจ่ายนี้"
+                            }
+                          </p>
+                          <div className="space-y-2">
+                            <button
+                              type="button"
+                              onClick={() => setMockLiffActionState("approved")}
+                              className="w-full bg-stone-950 hover:bg-stone-900 text-white font-bold py-2 px-3 rounded-xl text-[11px] flex items-center justify-center gap-1.5 transition"
+                            >
+                              <CheckCircle size={13} />
+                              {mockLiffActionType === "clearance" ? "ยืนยันอนุมัติเคลียร์ยอด" : "ยืนยันอนุมัติใบเบิก"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMockLiffActionState("rejected")}
+                              className="w-full bg-red-50 hover:bg-red-100 text-red-700 font-bold py-2 px-3 rounded-xl text-[11px] flex items-center justify-center gap-1.5 transition"
+                            >
+                              <X size={13} />
+                              {mockLiffActionType === "clearance" ? "ปฏิเสธ / ตีกลับแก้ไข" : "ไม่อนุมัติรายการ"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="bg-white border border-emerald-100 rounded-xl p-3.5 shadow-xs space-y-3 text-center">
+                          <div className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-emerald-50 text-emerald-600">
+                            <CheckCircle size={20} />
+                          </div>
+                          <h6 className="font-bold text-xs text-stone-900">
+                            {mockLiffActionState === "approved" ? "บันทึกผลอนุมัติเรียบร้อย" : "ปฏิเสธรายการเรียบร้อย"}
+                          </h6>
+                          <p className="text-[9px] text-stone-500">ระบบได้บันทึกสถานะการตัดสินใจของคุณเข้าสู่ระบบฐานข้อมูลอย่างปลอดภัยแล้ว</p>
+                          
+                          {mockLiffActionState === "approved" && mockLiffActionType === "advance" && (
+                            <div className="pt-2 border-t border-stone-100 mt-2 space-y-2">
+                              <p className="text-[8px] text-left text-stone-500 font-bold uppercase">ข้อมูลโอนเงิน:</p>
+                              <div className="bg-stone-50 text-left p-2 rounded-lg text-[9px] font-mono space-y-1">
+                                <div><span className="text-stone-400">ธนาคาร:</span> <span className="font-semibold text-stone-800">กสิกรไทย</span></div>
+                                <div><span className="text-stone-400">ชื่อบัญชี:</span> <span className="font-semibold text-stone-800">นายสมชาย มีทอง</span></div>
+                                <div className="flex justify-between">
+                                  <span><span className="text-stone-400">เลขบัญชี:</span> <span className="font-semibold text-stone-800">026-1-23456-7</span></span>
+                                  <span className="text-blue-600 font-bold text-[8px] cursor-pointer" onClick={() => alert("คัดลอกเลขที่บัญชีแล้ว (จำลอง)")}>Copy</span>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPhoneViewMode("liff_slip");
+                                  setMockLiffSlipState("pending");
+                                }}
+                                className="w-full bg-stone-950 text-white font-bold py-1.5 rounded-lg text-[9px] flex items-center justify-center gap-1"
+                              >
+                                <Upload size={10} /> แนบสลิปผ่าน LINE (ถัดไป)
+                              </button>
+                            </div>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => setMockLiffActionState("pending")}
+                            className="text-[9px] text-stone-500 hover:text-stone-900 block mx-auto underline pt-1"
+                          >
+                            ทำรายการใหม่ (Reset Demo)
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  {/* Input area */}
-                  <div className="bg-white h-12 flex items-center px-3 border-t border-stone-200">
-                    <div className="w-6 h-6 rounded-full border-2 border-stone-300 mr-2"></div>
-                    <div className="flex-1 bg-stone-100 h-8 rounded-full"></div>
+                ) : (
+                  // LIFF SLIP UPLOADER SCREEN
+                  <div className="bg-stone-50 w-full h-full rounded-[30px] overflow-hidden flex flex-col relative text-stone-900 font-sans">
+                    {/* LIFF Header */}
+                    <div className="bg-white border-b border-stone-200 h-14 flex items-center justify-between px-4 pt-2 shrink-0">
+                      <div>
+                        <p className="text-[9px] text-stone-500 font-semibold tracking-wider">LINE LIFF</p>
+                        <h4 className="text-xs font-bold text-stone-900">แนบหลักฐานการโอน</h4>
+                      </div>
+                      <span className="text-[8px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-full font-bold">OCR Auto</span>
+                    </div>
+
+                    {/* LIFF Content */}
+                    <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+                      <div className="bg-white border border-stone-200 rounded-xl p-3 shadow-xs space-y-2">
+                        <div className="text-[10px] font-bold text-stone-900">รายการโอนเงินสำหรับ ADV-2607-0018</div>
+                        <div className="bg-stone-50 rounded-lg p-2.5 text-[9px] font-mono space-y-1">
+                          <div><span className="text-stone-400">ธนาคาร:</span> <span className="font-bold text-stone-800">กสิกรไทย</span></div>
+                          <div><span className="text-stone-400">เลขบัญชี:</span> <span className="font-bold text-stone-800">026-1-23456-7</span></div>
+                          <div><span className="text-stone-400">ยอดเงินโอน:</span> <span className="font-bold text-stone-900 text-xs">฿12,500.00</span></div>
+                        </div>
+                      </div>
+
+                      {mockLiffSlipState === "pending" ? (
+                        <div 
+                          onClick={() => setMockLiffSlipState("uploaded")}
+                          className="border-2 border-dashed border-stone-300 hover:border-stone-900 rounded-xl p-6 bg-white cursor-pointer text-center space-y-2 transition-all shadow-xs"
+                        >
+                          <div className="w-9 h-9 bg-stone-100 rounded-full flex items-center justify-center mx-auto text-stone-500">
+                            <Upload size={18} />
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-bold text-stone-800">คลิกเพื่อจำลองการแนบสลิป</p>
+                            <p className="text-[8px] text-stone-400">รองรับสลิปโอนเงินทุกธนาคาร</p>
+                          </div>
+                        </div>
+                      ) : mockLiffSlipState === "uploaded" ? (
+                        <div className="bg-white border border-stone-200 rounded-xl p-3 shadow-xs space-y-3">
+                          <p className="text-[9px] text-amber-600 font-bold text-center animate-pulse">⚡ กำลังวิเคราะห์สลิปด้วย AI OCR...</p>
+                          
+                          {/* Simulated Slip Preview */}
+                          <div className="w-full h-24 bg-gradient-to-br from-emerald-100 to-teal-50 rounded-lg border border-emerald-200 p-2 flex flex-col justify-between relative overflow-hidden">
+                            <div className="text-[8px] font-bold text-emerald-800 uppercase flex items-center gap-1">
+                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div> K-Plus Slip Verified
+                            </div>
+                            <div className="text-right">
+                              <p className="text-[7px] text-stone-400 font-mono">1 ก.ค. 2026 - 13:14</p>
+                              <p className="text-xs font-mono font-black text-stone-800">฿12,500.00</p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setMockLiffSlipState("success")}
+                              className="w-full bg-stone-950 text-white font-bold py-2 rounded-xl text-[10px] transition animate-bounce"
+                            >
+                              ยืนยันสลิปผ่านการตรวจจับ OCR
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMockLiffSlipState("pending")}
+                              className="w-full bg-stone-100 text-stone-600 font-semibold py-1.5 rounded-xl text-[9px]"
+                            >
+                              ยกเลิก / เลือกรูปใหม่
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="bg-white border border-emerald-100 rounded-xl p-4 shadow-xs text-center space-y-3">
+                          <div className="w-9 h-9 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+                            <CheckCircle size={22} />
+                          </div>
+                          <div>
+                            <h6 className="font-bold text-xs text-stone-900">แนบสลิปโอนเงินสำเร็จแล้ว</h6>
+                            <p className="text-[9px] text-stone-500 mt-1">อัปเดตสถานะของ ADV-2607-0018 ในระบบเป็นส่งงานเคลียร์ยอดถัดไป</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setMockLiffSlipState("pending");
+                              setPhoneViewMode("chat");
+                            }}
+                            className="w-full bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold py-2 rounded-xl text-[10px] transition"
+                          >
+                            กลับหน้า แชท LINE (Reset Demo)
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             </div>
+          </div>
+          
+          {/* E) LINE Account Linking Invitation Panel */}
+          <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden shadow-xs p-6 space-y-6 mt-6">
+            <div>
+              <h4 className="text-sm font-bold text-stone-900 flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-stone-700" />
+                📢 จัดส่งคำเชิญลงทะเบียนผูกบัญชี LINE (LINE Account Linking Invitation)
+              </h4>
+              <p className="text-xs text-stone-500 mt-1">
+                พนักงานที่สมัครเข้ามาในระบบแล้วแต่ยังไม่ได้เชื่อมต่อกับ LINE ID ของตนเอง คุณสามารถคัดลอกลิงก์ส่วนตัวไปส่งให้รายบุคคล หรือติ๊กเลือกเพื่อยิงข้อความคำเชิญเข้า LINE Group ของบริษัทได้ทันที
+              </p>
+            </div>
+
+            {invitationSuccess && (
+              <div className="p-3.5 bg-emerald-50 text-emerald-800 rounded-xl text-xs font-semibold border border-emerald-100 flex items-center gap-2 animate-fade-in">
+                <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{invitationSuccess}</span>
+              </div>
+            )}
+
+            {invitationError && (
+              <div className="p-3.5 bg-red-50 text-red-800 rounded-xl text-xs font-semibold border border-red-100 flex items-center gap-2 animate-fade-in">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                <span>{invitationError}</span>
+              </div>
+            )}
+
+            {(() => {
+              const unlinked = employees.filter(emp => emp.isActive !== false && !emp.lineUserId);
+              if (unlinked.length === 0) {
+                return (
+                  <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-6 text-center">
+                    <p className="text-sm font-bold text-emerald-800">🎉 พนักงานทุกคนผูกบัญชี LINE เรียบร้อยแล้ว!</p>
+                    <p className="text-xs text-emerald-600 mt-1">ไม่มีรายชื่อพนักงานตกค้างที่ยังไม่เชื่อมต่อบัญชี</p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center bg-stone-50 p-3 rounded-xl border border-stone-150 flex-wrap gap-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={unlinked.length > 0 && unlinked.every(emp => selectedUnlinkedEmpIds.includes(emp.id))}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedUnlinkedEmpIds(unlinked.map(emp => emp.id));
+                          } else {
+                            setSelectedUnlinkedEmpIds([]);
+                          }
+                        }}
+                        className="w-4 h-4 rounded text-stone-950 border-stone-300 focus:ring-stone-950"
+                      />
+                      <span className="text-xs font-bold text-stone-700">เลือกทั้งหมด ({unlinked.length} คน)</span>
+                    </label>
+                    
+                    <button
+                      type="button"
+                      onClick={handleSendLinkingInvitations}
+                      disabled={sendingInvitations || selectedUnlinkedEmpIds.length === 0}
+                      className="px-4 py-2 bg-stone-950 hover:bg-stone-900 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition disabled:opacity-50"
+                    >
+                      {sendingInvitations ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Send className="w-3.5 h-3.5" />
+                      )}
+                      ส่งคำเชิญลงกลุ่ม LINE ({selectedUnlinkedEmpIds.length} คน)
+                    </button>
+                  </div>
+
+                  <div className="border border-stone-200 rounded-2xl overflow-hidden divide-y divide-stone-100 max-h-80 overflow-y-auto bg-white">
+                    {unlinked.map(emp => {
+                      const personalLiffUrl = `https://liff.line.me/${lineLiffId || "123456-abcde"}?emp_id=${emp.id}`;
+                      const isSelected = selectedUnlinkedEmpIds.includes(emp.id);
+                      return (
+                        <div key={emp.id} className="p-3.5 flex flex-wrap items-center justify-between gap-4 hover:bg-stone-50 transition">
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedUnlinkedEmpIds([...selectedUnlinkedEmpIds, emp.id]);
+                                } else {
+                                  setSelectedUnlinkedEmpIds(selectedUnlinkedEmpIds.filter(id => id !== emp.id));
+                                }
+                              }}
+                              className="w-4 h-4 rounded text-stone-950 border-stone-300 focus:ring-stone-950"
+                            />
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-stone-900">{emp.name}</span>
+                                {emp.nickname && (
+                                  <span className="text-[10px] text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">({emp.nickname})</span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-stone-400 font-mono mt-0.5">
+                                {emp.employeeCode || emp.employeeId || emp.username} • {emp.position || emp.role}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(personalLiffUrl);
+                                alert(`คัดลอกลิงก์ส่วนตัวของ ${emp.name} สำเร็จ!`);
+                              }}
+                              className="px-3 py-1.5 bg-white border border-stone-200 hover:bg-stone-50 text-stone-700 text-[11px] font-bold rounded-lg flex items-center gap-1 transition"
+                            >
+                              <Copy className="w-3.5 h-3.5" /> คัดลอกลิงก์ส่วนตัว
+                            </button>
+                            
+                            <a
+                              href={`https://line.me/R/msg/text/?${encodeURIComponent(`กรุณากดลิงก์นี้เพื่อผูกบัญชี LINE กับระบบ ClearAdvance: ${personalLiffUrl}`)}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-[11px] font-bold rounded-lg flex items-center gap-1 transition"
+                            >
+                              <Send className="w-3.5 h-3.5" /> ส่งต่อแชท
+                            </a>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+          
+          {/* Liff Action Logs Section */}
+          <div className="mt-8 pt-8 border-t border-stone-200">
+             <LiffActionLogs />
           </div>
         </div>
       )}
@@ -5905,6 +7289,98 @@ Project Alpha, 12000000, 1000000`}
                   className="px-5 py-2 bg-stone-950 hover:bg-stone-900 text-white font-bold rounded-xl text-xs transition flex items-center gap-1.5"
                 >
                   {saving ? "กำลังนำเข้า..." : <><Check className="w-3.5 h-3.5 text-emerald-400" /> นำเข้ารายการหมวดหมู่ทั้งหมด</>}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 6. Delete Category Confirmation Modal */}
+      {categoryToDelete && (
+        <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="delete_category_modal">
+          <div className="bg-white border border-stone-200 rounded-3xl shadow-xl w-full max-w-md overflow-hidden flex flex-col">
+            <div className="p-5 border-b border-stone-100 flex items-center justify-between bg-stone-50">
+              <h3 className="font-bold text-stone-900 text-sm flex items-center gap-1.5">
+                ⚠️ ยืนยันการลบหมวดหมู่ค่าใช้จ่าย
+              </h3>
+              <button
+                type="button"
+                onClick={() => setCategoryToDelete(null)}
+                className="p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-stone-600">
+                คุณแน่ใจหรือไม่ที่จะลบหมวดหมู่ค่าใช้จ่าย <span className="font-bold text-stone-900">"{categoryToDelete}"</span>? การลบนี้จะมีผลต่อการเลือกหมวดหมู่ในแบบฟอร์มขอสำรองจ่ายทันที
+              </p>
+              <div className="pt-2 flex justify-end gap-2 border-t">
+                <button
+                  type="button"
+                  onClick={() => setCategoryToDelete(null)}
+                  className="px-4 py-2 bg-stone-100 hover:bg-stone-200 font-bold rounded-xl text-xs transition text-stone-700"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const cat = categoryToDelete;
+                    setCategoryToDelete(null);
+                    await handleRemoveCategory(cat);
+                  }}
+                  disabled={saving}
+                  className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs transition"
+                >
+                  {saving ? "กำลังลบ..." : "ยืนยันการลบ"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 7. Delete Project Confirmation Modal */}
+      {projectToDelete && (
+        <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="delete_project_modal">
+          <div className="bg-white border border-stone-200 rounded-3xl shadow-xl w-full max-w-md overflow-hidden flex flex-col">
+            <div className="p-5 border-b border-stone-100 flex items-center justify-between bg-stone-50">
+              <h3 className="font-bold text-stone-900 text-sm flex items-center gap-1.5">
+                ⚠️ ยืนยันการลบโครงการ
+              </h3>
+              <button
+                type="button"
+                onClick={() => setProjectToDelete(null)}
+                className="p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-stone-600">
+                คุณแน่ใจหรือไม่ที่จะลบโครงการ <span className="font-bold text-stone-900">"{projectToDelete}"</span>? การลบนี้จะรวมถึงข้อมูลรายละเอียดและงบประมาณสะสมที่ผูกอยู่กับโครงการนี้ด้วย
+              </p>
+              <div className="pt-2 flex justify-end gap-2 border-t">
+                <button
+                  type="button"
+                  onClick={() => setProjectToDelete(null)}
+                  className="px-4 py-2 bg-stone-100 hover:bg-stone-200 font-bold rounded-xl text-xs transition text-stone-700"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const proj = projectToDelete;
+                    setProjectToDelete(null);
+                    await handleRemoveProject(proj);
+                  }}
+                  disabled={saving}
+                  className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs transition"
+                >
+                  {saving ? "กำลังลบ..." : "ยืนยันการลบ"}
                 </button>
               </div>
             </div>

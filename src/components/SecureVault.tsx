@@ -221,7 +221,7 @@ const generateDocumentHTML = (file: VaultFile, adv: any, items: any[]) => {
 
       <div class="section-title">เอกสารภาพหลักฐานสลิปการโอนเงิน (Attached Bank Slip)</div>
       <div class="text-center" style="margin: 20px 0;">
-        <img src="${file.fileUrl || 'https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?q=80&w=600'}" alt="Slip" style="max-width: 280px; border-radius: 12px; border: 1px solid #e5e7eb; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);" />
+        ${file.fileUrl ? `<img src="${file.fileUrl}" alt="Slip" style="max-width: 280px; border-radius: 12px; border: 1px solid #e5e7eb; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);" />` : '<div style="padding: 20px; text-align: center; color: #9ca3af; font-size: 12px;">ไม่มีรูปภาพ</div>'}
       </div>
 
       <div style="margin-top: 40px;" class="grid">

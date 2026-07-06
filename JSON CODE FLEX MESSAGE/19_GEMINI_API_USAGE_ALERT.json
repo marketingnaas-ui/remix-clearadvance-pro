@@ -1,0 +1,259 @@
+{
+  "type": "flex",
+  "altText": "แจ้งเตือนการใช้งาน Gemini API - {usageDate}",
+  "contents": {
+    "type": "bubble",
+    "size": "mega",
+    "styles": {
+      "body": {
+        "backgroundColor": "#F6F8FA"
+      },
+      "footer": {
+        "backgroundColor": "#F6F8FA"
+      }
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "paddingAll": "20px",
+      "spacing": "md",
+      "contents": [
+        {
+          "type": "box",
+          "layout": "horizontal",
+          "contents": [
+            {
+              "type": "box",
+              "layout": "vertical",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "ADVANCE PRO",
+                  "size": "xs",
+                  "color": "#94A3B8",
+                  "wrap": true,
+                  "weight": "bold"
+                },
+                {
+                  "type": "text",
+                  "text": "แจ้งเตือนการใช้งาน Gemini API",
+                  "size": "lg",
+                  "color": "#1F2937",
+                  "wrap": true,
+                  "weight": "bold",
+                  "margin": "xs"
+                }
+              ],
+              "flex": 8
+            },
+            {
+              "type": "box",
+              "layout": "vertical",
+              "contents": [
+                {
+                  "type": "box",
+                  "layout": "vertical",
+                  "backgroundColor": "#FFFBEB",
+                  "cornerRadius": "999px",
+                  "paddingTop": "5px",
+                  "paddingBottom": "5px",
+                  "paddingStart": "10px",
+                  "paddingEnd": "10px",
+                  "contents": [
+                    {
+                      "type": "text",
+                      "text": "Usage Alert",
+                      "size": "xs",
+                      "color": "#D97706",
+                      "wrap": true,
+                      "weight": "bold",
+                      "align": "center"
+                    }
+                  ]
+                }
+              ],
+              "flex": 4,
+              "alignItems": "flex-end"
+            }
+          ]
+        },
+        {
+          "type": "separator",
+          "margin": "lg",
+          "color": "#DDE7E6"
+        },
+        {
+          "type": "box",
+          "layout": "horizontal",
+          "margin": "lg",
+          "contents": [
+            {
+              "type": "text",
+              "text": "วันที่",
+              "size": "xs",
+              "color": "#64748B",
+              "wrap": true,
+              "flex": 4
+            },
+            {
+              "type": "text",
+              "text": "{usageDate}",
+              "size": "md",
+              "color": "#4E958D",
+              "wrap": true,
+              "weight": "bold",
+              "align": "end",
+              "flex": 8
+            }
+          ]
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F8FAFC",
+          "cornerRadius": "20px",
+          "borderColor": "#E2E8F0",
+          "borderWidth": "1px",
+          "paddingAll": "16px",
+          "contents": [
+            {
+              "type": "text",
+              "text": "ค่าใช้จ่ายประมาณการ",
+              "size": "xs",
+              "color": "#64748B",
+              "wrap": true,
+              "weight": "bold",
+              "align": "center"
+            },
+            {
+              "type": "text",
+              "text": "{estimatedCost}",
+              "size": "xxl",
+              "color": "#D97706",
+              "wrap": true,
+              "weight": "bold",
+              "align": "center",
+              "margin": "sm"
+            },
+            {
+              "type": "text",
+              "text": "บาท",
+              "size": "xs",
+              "color": "#64748B",
+              "wrap": true,
+              "align": "center",
+              "margin": "xs"
+            }
+          ]
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#FFFFFF",
+          "cornerRadius": "20px",
+          "borderColor": "#E5E7EB",
+          "borderWidth": "1px",
+          "paddingAll": "16px",
+          "spacing": "xs",
+          "contents": [
+            {
+              "type": "text",
+              "text": "รายละเอียด",
+              "size": "xs",
+              "color": "#4E958D",
+              "wrap": true,
+              "weight": "bold"
+            },
+            {
+              "type": "separator",
+              "margin": "sm",
+              "color": "#EEF2F7"
+            },
+            {
+              "type": "box",
+              "layout": "horizontal",
+              "spacing": "md",
+              "margin": "sm",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "จำนวน OCR วันนี้",
+                  "size": "xs",
+                  "color": "#64748B",
+                  "wrap": true,
+                  "flex": 5
+                },
+                {
+                  "type": "text",
+                  "text": "{ocrCountToday} ครั้ง",
+                  "size": "sm",
+                  "color": "#1F2937",
+                  "wrap": true,
+                  "weight": "bold",
+                  "align": "end",
+                  "flex": 7
+                }
+              ]
+            },
+            {
+              "type": "box",
+              "layout": "horizontal",
+              "spacing": "md",
+              "margin": "sm",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "สถานะ",
+                  "size": "xs",
+                  "color": "#64748B",
+                  "wrap": true,
+                  "flex": 5
+                },
+                {
+                  "type": "text",
+                  "text": "{quotaStatus}",
+                  "size": "sm",
+                  "color": "#1F2937",
+                  "wrap": true,
+                  "weight": "bold",
+                  "align": "end",
+                  "flex": 7
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "footer": {
+      "type": "box",
+      "layout": "vertical",
+      "paddingAll": "16px",
+      "spacing": "sm",
+      "contents": [
+        {
+          "type": "button",
+          "height": "sm",
+          "style": "primary",
+          "action": {
+            "type": "uri",
+            "label": "เปิด Gemini OCR Settings",
+            "uri": "{settingsGeminiUrl}"
+          },
+          "color": "#4E958D"
+        },
+        {
+          "type": "button",
+          "height": "sm",
+          "style": "secondary",
+          "action": {
+            "type": "uri",
+            "label": "ดู OCR Usage Log",
+            "uri": "{ocrUsageLogUrl}"
+          },
+          "color": "#E5E7EB"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,289 @@
+{
+  "type": "bubble",
+  "size": "mega",
+  "header": {
+    "type": "box",
+    "layout": "vertical",
+    "backgroundColor": "#00A5E0",
+    "paddingAll": "16px",
+    "contents": [
+      {
+        "type": "text",
+        "text": "{settlementNo}",
+        "weight": "bold",
+        "size": "xl",
+        "color": "#FFFFFF",
+        "align": "center"
+      },
+      {
+        "type": "text",
+        "text": "{employeeName}",
+        "size": "lg",
+        "color": "#FFFFFF",
+        "align": "center",
+        "margin": "sm"
+      }
+    ]
+  },
+  "body": {
+    "type": "box",
+    "layout": "vertical",
+    "backgroundColor": "#FFFFFF",
+    "spacing": "sm",
+    "contents": [
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "spacing": "md",
+        "contents": [
+          {
+            "type": "box",
+            "layout": "vertical",
+            "width": "74px",
+            "spacing": "sm",
+            "contents": [
+              {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#32CBFF",
+                "cornerRadius": "16px",
+                "paddingAll": "8px",
+                "contents": [
+                  {
+                    "type": "text",
+                    "text": "ยอดเคลียร์",
+                    "size": "xs",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  },
+                  {
+                    "type": "text",
+                    "text": "{settlementAmountShort}",
+                    "weight": "bold",
+                    "size": "xs",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  }
+                ]
+              },
+              {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#89A1EF",
+                "cornerRadius": "16px",
+                "paddingAll": "8px",
+                "contents": [
+                  {
+                    "type": "text",
+                    "text": "ใบเบิกเดิม",
+                    "size": "xs",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  },
+                  {
+                    "type": "text",
+                    "text": "{advNo}",
+                    "weight": "bold",
+                    "size": "xxs",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  }
+                ]
+              },
+              {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#EF9CDA",
+                "cornerRadius": "16px",
+                "paddingAll": "8px",
+                "contents": [
+                  {
+                    "type": "text",
+                    "text": "ไฟล์แนบ",
+                    "size": "xs",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  },
+                  {
+                    "type": "text",
+                    "text": "{attachmentCount}",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#FFFFFF",
+            "cornerRadius": "22px",
+            "height": "170px",
+            "flex": 1,
+            "contents": [
+              {
+                "type": "image",
+                "url": "{profileImageUrl}",
+                "size": "full",
+                "aspectMode": "cover",
+                "aspectRatio": "1:1"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "separator",
+        "margin": "lg",
+        "color": "#E6D7F4"
+      },
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "contents": [
+          {
+            "type": "text",
+            "text": "โครงการ",
+            "size": "sm",
+            "color": "#9A8477",
+            "flex": 3
+          },
+          {
+            "type": "text",
+            "text": "{projectName}",
+            "size": "sm",
+            "color": "#24324A",
+            "weight": "bold",
+            "flex": 7,
+            "align": "end",
+            "wrap": true
+          }
+        ]
+      },
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "contents": [
+          {
+            "type": "text",
+            "text": "ใบเบิกอ้างอิง",
+            "size": "sm",
+            "color": "#9A8477",
+            "flex": 3
+          },
+          {
+            "type": "text",
+            "text": "{advNo}",
+            "size": "sm",
+            "color": "#24324A",
+            "weight": "bold",
+            "flex": 7,
+            "align": "end",
+            "wrap": true
+          }
+        ]
+      },
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "contents": [
+          {
+            "type": "text",
+            "text": "จำนวนไฟล์แนบ",
+            "size": "sm",
+            "color": "#9A8477",
+            "flex": 3
+          },
+          {
+            "type": "text",
+            "text": "{attachmentCount} ไฟล์",
+            "size": "sm",
+            "color": "#24324A",
+            "weight": "bold",
+            "flex": 7,
+            "align": "end",
+            "wrap": true
+          }
+        ]
+      },
+      {
+        "type": "separator",
+        "margin": "lg",
+        "color": "#E6D7F4"
+      },
+      {
+        "type": "box",
+        "layout": "vertical",
+        "backgroundColor": "#FFFFFF",
+        "cornerRadius": "18px",
+        "paddingAll": "xs",
+        "margin": "xs",
+        "spacing": "sm",
+        "contents": [
+          {
+            "type": "text",
+            "text": "{currentSettlementTotal}",
+            "size": "xl",
+            "weight": "bold",
+            "color": "#000000",
+            "align": "center"
+          },
+          {
+            "type": "text",
+            "text": "ยอดเงินเคลียร์ยอด",
+            "size": "xs",
+            "color": "#989898",
+            "align": "center",
+            "margin": "sm"
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "type": "box",
+    "layout": "horizontal",
+    "spacing": "xs",
+    "paddingAll": "none",
+    "backgroundColor": "#FECEF1",
+    "paddingBottom": "xl",
+    "paddingStart": "xl",
+    "paddingEnd": "xl",
+    "contents": [
+      {
+        "type": "button",
+        "style": "primary",
+        "color": "#00A5E0",
+        "action": {
+          "type": "uri",
+          "label": "ตรวจเอกสาร",
+          "uri": "{liffAccountingReviewUrl}"
+        }
+      },
+      {
+        "type": "button",
+        "style": "primary",
+        "color": "#EF9CDA",
+        "action": {
+          "type": "uri",
+          "label": "ดูไฟล์แนบ",
+          "uri": "{liffAttachmentsUrl}"
+        }
+      }
+    ]
+  },
+  "styles": {
+    "header": {
+      "backgroundColor": "#00A5E0"
+    },
+    "body": {
+      "backgroundColor": "#FECEF1"
+    },
+    "footer": {
+      "backgroundColor": "#FECEF1"
+    }
+  }
+}

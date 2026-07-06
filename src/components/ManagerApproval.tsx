@@ -8,6 +8,7 @@ import { collection, doc, updateDoc, onSnapshot, query, where, setDoc, getDoc, g
 import { db } from "../lib/firebase";
 import { triggerAutoSyncSheetsIfEnabled, triggerAutoSyncVaultFoldersIfEnabled } from "../lib/workspaceSync";
 import { sendLineNotification } from "../lib/lineNotify";
+import { uploadBase64 } from "../lib/storage";
 import { Advance, AdvanceStatus, Employee, ActionType, AuditLog, UserRole } from "../types";
 import { exportToExcel } from "../lib/excelExport";
 import { 
@@ -35,6 +36,20 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
   const [activeDetailTab, setActiveDetailTab] = useState<"info" | "docs" | "timeline">("info");
   const [advTimeline, setAdvTimeline] = useState<AuditLog[]>([]);
   const [loadingTimeline, setLoadingTimeline] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    confirmText?: string;
+    cancelText?: string;
+    isDanger?: boolean;
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: () => {},
+  });
 
   const handleOpenDetail = async (adv: Advance) => {
     setDetailModalAdv(adv);
@@ -169,16 +184,7 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
     }
   };
 
-  const handleBulkApprove = async () => {
-    const idsToApprove = selectedAdvIds.filter(id => 
-      advances.find(adv => adv.id === id)?.status === AdvanceStatus.PENDING_APPROVAL
-    );
-
-    if (idsToApprove.length === 0) {
-      setError("ไม่มีรายการสถานะรออนุมัติที่เลือกอยู่");
-      return;
-    }
-
+  const executeBulkApprove = async (idsToApprove: string[]) => {
     setError(null);
     setSuccess(null);
     setBulkProcessing(true);
@@ -242,16 +248,31 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
     }
   };
 
-  const handleBulkReject = async () => {
-    const idsToReject = selectedAdvIds.filter(id => 
+  const handleBulkApprove = () => {
+    const idsToApprove = selectedAdvIds.filter(id => 
       advances.find(adv => adv.id === id)?.status === AdvanceStatus.PENDING_APPROVAL
     );
 
-    if (idsToReject.length === 0) {
+    if (idsToApprove.length === 0) {
       setError("ไม่มีรายการสถานะรออนุมัติที่เลือกอยู่");
       return;
     }
 
+    setConfirmDialog({
+      isOpen: true,
+      title: "ยืนยันการอนุมัติแบบกลุ่ม",
+      message: `คุณแน่ใจหรือไม่ว่าต้องการอนุมัติรายการคำขอที่เลือกทั้งหมดจำนวน ${idsToApprove.length} รายการ?`,
+      confirmText: "อนุมัติกลุ่มทั้งหมด",
+      cancelText: "ยกเลิก",
+      isDanger: false,
+      onConfirm: () => {
+        executeBulkApprove(idsToApprove);
+        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+      }
+    });
+  };
+
+  const executeBulkReject = async (idsToReject: string[]) => {
     setError(null);
     setSuccess(null);
     setBulkProcessing(true);
@@ -298,6 +319,30 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
     }
   };
 
+  const handleBulkReject = () => {
+    const idsToReject = selectedAdvIds.filter(id => 
+      advances.find(adv => adv.id === id)?.status === AdvanceStatus.PENDING_APPROVAL
+    );
+
+    if (idsToReject.length === 0) {
+      setError("ไม่มีรายการสถานะรออนุมัติที่เลือกอยู่");
+      return;
+    }
+
+    setConfirmDialog({
+      isOpen: true,
+      title: "ยืนยันการปฏิเสธแบบกลุ่ม",
+      message: `คุณแน่ใจหรือไม่ว่าต้องการปฏิเสธ/ไม่อนุมัติรายการคำขอที่เลือกทั้งหมดจำนวน ${idsToReject.length} รายการ?`,
+      confirmText: "ปฏิเสธกลุ่มทั้งหมด",
+      cancelText: "ยกเลิก",
+      isDanger: true,
+      onConfirm: () => {
+        executeBulkReject(idsToReject);
+        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+      }
+    });
+  };
+
   useEffect(() => {
     // Listen to all advances for history and pending tabs
     const q = collection(db, "advances");
@@ -335,7 +380,7 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
     return () => unsubscribe();
   }, []);
 
-  const handleApprove = async (adv: Advance) => {
+  const executeApprove = async (adv: Advance) => {
     setError(null);
     setSuccess(null);
     try {
@@ -387,7 +432,22 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
     }
   };
 
-  const handleReject = async (adv: Advance) => {
+  const handleApprove = (adv: Advance) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: "ยืนยันการอนุมัติใบเบิก",
+      message: `คุณแน่ใจหรือไม่ว่าต้องการอนุมัติใบเบิกเงินด่วนเลขที่ ${adv.advId} จำนวน ${adv.requestAmount.toLocaleString("th-TH")} บาท ของคุณ ${adv.employeeName}?`,
+      confirmText: "อนุมัติรายการ",
+      cancelText: "ยกเลิก",
+      isDanger: false,
+      onConfirm: () => {
+        executeApprove(adv);
+        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+      }
+    });
+  };
+
+  const executeReject = async (adv: Advance) => {
     setError(null);
     setSuccess(null);
     try {
@@ -414,6 +474,19 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
       triggerAutoSyncSheetsIfEnabled();
       triggerAutoSyncVaultFoldersIfEnabled();
 
+      sendLineNotification({
+        triggerId: "onReject",
+        variables: {
+          advId: adv.advId,
+          amount: adv.amount,
+          requesterName: adv.employeeName,
+          purpose: adv.purpose,
+          requesterId: adv.employeeId,
+          targetEmployeeId: adv.employeeId
+        },
+        targetEmployeeId: adv.employeeId
+      });
+
       setSuccess(`ปฏิเสธคำขอเบิก ${adv.advId} เรียบร้อยแล้ว`);
       setSelectedAdv(null);
     } catch (err) {
@@ -422,7 +495,22 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
     }
   };
 
-  const handleUploadSlip = async (adv: Advance) => {
+  const handleReject = (adv: Advance) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: "ยืนยันการปฏิเสธใบเบิก",
+      message: `คุณแน่ใจหรือไม่ว่าต้องการปฏิเสธ/ไม่อนุมัติใบเบิกเงินด่วนเลขที่ ${adv.advId} จำนวน ${adv.requestAmount.toLocaleString("th-TH")} บาท ของคุณ ${adv.employeeName}?`,
+      confirmText: "ไม่อนุมัติ",
+      cancelText: "ยกเลิก",
+      isDanger: true,
+      onConfirm: () => {
+        executeReject(adv);
+        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+      }
+    });
+  };
+
+  const executeUploadSlip = async (adv: Advance) => {
     if (!slipUrl.trim()) {
       setError("กรุณากรอก URL สลิปโอนเงินประกอบรายการ");
       return;
@@ -475,6 +563,49 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
     } catch (err) {
       console.error("Upload Error:", err);
       setError(`เกิดข้อผิดพลาดในการอัปโหลดเอกสาร: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  };
+
+  const handleUploadSlip = (adv: Advance) => {
+    if (!slipUrl.trim()) {
+      setError("กรุณากรอก URL สลิปโอนเงินประกอบรายการ");
+      return;
+    }
+
+    setConfirmDialog({
+      isOpen: true,
+      title: "ยืนยันการบันทึกข้อมูลโอนเงิน",
+      message: `คุณแน่ใจหรือไม่ว่าได้ทำการโอนเงินสำเร็จเรียบร้อยแล้ว และต้องการบันทึกหลักฐานการโอนเงินสดจำนวน ${adv.requestAmount.toLocaleString("th-TH")} บาท สำหรับคำขอเลขที่ ${adv.advId}?`,
+      confirmText: "บันทึกและแจ้งโอน",
+      cancelText: "ยกเลิก",
+      isDanger: false,
+      onConfirm: () => {
+        executeUploadSlip(adv);
+        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+      }
+    });
+  };
+
+  const handleRequestLiffSlip = async (adv: Advance) => {
+    setError(null);
+    setSuccess(null);
+    try {
+      sendLineNotification({
+        triggerId: "onTransferReady",
+        variables: {
+          advId: adv.advId,
+          amount: adv.amount,
+          requesterName: adv.employeeName,
+          purpose: adv.purpose,
+          requesterId: adv.employeeId,
+          targetEmployeeId: adv.employeeId
+        },
+        targetEmployeeId: adv.employeeId
+      });
+      setSuccess(`ส่งแจ้งเตือนให้แนบสลิปผ่าน LIFF สำหรับ ${adv.advId} เรียบร้อยแล้ว`);
+    } catch (err) {
+      console.error(err);
+      setError("เกิดข้อผิดพลาดในการส่งแจ้งเตือน");
     }
   };
 
@@ -1017,13 +1148,33 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
               {activeDetailTab === "docs" && (
                 <div className="space-y-6">
                   {detailModalAdv.attachmentUrl ? (
-                    <div className="space-y-3">
-                      <p className="text-xs font-bold text-stone-900">เอกสารประกอบการเบิก:</p>
-                      <img
-                        src={detailModalAdv.attachmentUrl}
-                        alt="Attachment"
-                        className="w-full rounded-2xl border border-stone-200 shadow-sm"
-                      />
+                    <div className="space-y-4">
+                      <div className="space-y-3">
+                        <p className="text-xs font-bold text-stone-900">เอกสารประกอบการเบิก:</p>
+                        <img
+                          src={detailModalAdv.attachmentUrl}
+                          alt="Attachment"
+                          className="w-full rounded-2xl border border-stone-200 shadow-sm cursor-pointer"
+                          onClick={() => window.open(detailModalAdv.attachmentUrl, '_blank')}
+                        />
+                      </div>
+                      
+                      {detailModalAdv.additionalAttachmentUrls && detailModalAdv.additionalAttachmentUrls.length > 0 && (
+                        <div className="space-y-4 pt-4 border-t border-stone-100">
+                          <p className="text-xs font-bold text-stone-900">เอกสารเพิ่มเติม ({detailModalAdv.additionalAttachmentUrls.length}):</p>
+                          <div className="grid grid-cols-1 gap-4">
+                            {detailModalAdv.additionalAttachmentUrls.map((url, idx) => (
+                              <img
+                                key={idx}
+                                src={url}
+                                alt={`Additional Attachment ${idx + 1}`}
+                                className="w-full rounded-2xl border border-stone-200 shadow-sm cursor-pointer"
+                                onClick={() => window.open(url, '_blank')}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="py-20 text-center text-stone-400 text-xs flex flex-col items-center gap-2">
@@ -1184,39 +1335,51 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
                     <input
                       type="file"
                       accept="image/*"
-                      onChange={(e) => {
+                      onChange={async (e) => {
                         const file = e.target.files?.[0];
                         if (file) {
                           const reader = new FileReader();
-                          reader.onloadend = () => {
+                          reader.onloadend = async () => {
                             if (typeof reader.result === "string") {
-                              const img = document.createElement('img');
-                              img.onload = () => {
-                                const canvas = document.createElement('canvas');
-                                const MAX_WIDTH = 400; // Reduced from 800
-                                const MAX_HEIGHT = 400; // Reduced from 800
-                                let width = img.width;
-                                let height = img.height;
+                              const resultStr = reader.result;
+                              try {
+                                const finalBase64 = await new Promise<string>((resolve) => {
+                                  const img = document.createElement('img');
+                                  img.onload = () => {
+                                    const canvas = document.createElement('canvas');
+                                    const MAX_WIDTH = 1200;
+                                    const MAX_HEIGHT = 1200;
+                                    let width = img.width;
+                                    let height = img.height;
 
-                                if (width > height) {
-                                  if (width > MAX_WIDTH) {
-                                    height *= MAX_WIDTH / width;
-                                    width = MAX_WIDTH;
-                                  }
-                                } else {
-                                  if (height > MAX_HEIGHT) {
-                                    width *= MAX_HEIGHT / height;
-                                    height = MAX_HEIGHT;
-                                  }
-                                }
-                                canvas.width = width;
-                                canvas.height = height;
-                                const ctx = canvas.getContext('2d');
-                                ctx?.drawImage(img, 0, 0, width, height);
-                                const dataUrl = canvas.toDataURL('image/jpeg', 0.4); // Reduced quality from 0.7 to 0.4
-                                setSlipUrl(dataUrl);
-                              };
-                              img.src = reader.result;
+                                    if (width > height) {
+                                      if (width > MAX_WIDTH) {
+                                        height *= MAX_WIDTH / width;
+                                        width = MAX_WIDTH;
+                                      }
+                                    } else {
+                                      if (height > MAX_HEIGHT) {
+                                        width *= MAX_HEIGHT / height;
+                                        height = MAX_HEIGHT;
+                                      }
+                                    }
+                                    canvas.width = width;
+                                    canvas.height = height;
+                                    const ctx = canvas.getContext('2d');
+                                    ctx?.drawImage(img, 0, 0, width, height);
+                                    resolve(canvas.toDataURL('image/jpeg', 0.8));
+                                  };
+                                  img.src = resultStr;
+                                });
+
+                                // Upload to real storage
+                                const storagePath = `slips/${selectedAdv?.id || 'unsorted'}/${Date.now()}_${file.name}`;
+                                const realUrl = await uploadBase64(finalBase64, storagePath, file.type);
+                                setSlipUrl(realUrl);
+                              } catch (err) {
+                                console.error("Slip upload error:", err);
+                                setError("ไม่สามารถอัปโหลดรูปภาพสลิปได้");
+                              }
                             }
                           };
                           reader.readAsDataURL(file);
@@ -1232,7 +1395,13 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
               </div>
             </div>
 
-            <div className="p-6 border-t border-stone-100 bg-stone-50 flex justify-end gap-2">
+            <div className="p-6 border-t border-stone-100 bg-stone-50 flex flex-wrap justify-end gap-2">
+              <button
+                onClick={() => handleRequestLiffSlip(selectedAdv)}
+                className="px-4 py-2 bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 rounded-xl text-xs font-bold transition flex items-center gap-1"
+              >
+                ส่งแจ้งเตือนให้ผู้เบิกแนบสลิปผ่าน LIFF
+              </button>
               <button
                 onClick={() => setSelectedAdv(null)}
                 className="px-4 py-2 text-stone-600 hover:bg-stone-100 rounded-xl text-xs font-bold transition"
@@ -1243,7 +1412,36 @@ export default function ManagerApproval({ currentEmployee }: ManagerApprovalProp
                 onClick={() => handleUploadSlip(selectedAdv)}
                 className="px-5 py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-xs font-bold transition flex items-center gap-1"
               >
-                <Check className="w-3.5 h-3.5" /> บันทึกและแจ้งโอน
+                <Check className="w-3.5 h-3.5" /> บันทึกและแจ้งโอน (เอง)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Custom Confirmation Modal */}
+      {confirmDialog.isOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in" id="confirm_modal_overlay">
+          <div className="bg-white border border-stone-200 rounded-3xl max-w-sm w-full overflow-hidden shadow-xl animate-scale-in p-6 space-y-6" id="confirm_modal_box">
+            <div className="space-y-2">
+              <h3 className={`font-bold text-lg ${confirmDialog.isDanger ? "text-red-600" : "text-stone-900"}`}>{confirmDialog.title}</h3>
+              <p className="text-sm text-stone-600 leading-relaxed">{confirmDialog.message}</p>
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold text-xs rounded-xl transition"
+                id="confirm_modal_cancel_btn"
+              >
+                {confirmDialog.cancelText || "ยกเลิก"}
+              </button>
+              <button
+                onClick={() => {
+                  confirmDialog.onConfirm();
+                }}
+                className={`px-4 py-2 text-white font-bold text-xs rounded-xl transition ${confirmDialog.isDanger ? "bg-red-600 hover:bg-red-700" : "bg-stone-900 hover:bg-stone-800"}`}
+                id="confirm_modal_confirm_btn"
+              >
+                {confirmDialog.confirmText || "ยืนยัน"}
               </button>
             </div>
           </div>

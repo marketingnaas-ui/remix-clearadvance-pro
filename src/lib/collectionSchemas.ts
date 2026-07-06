@@ -54,7 +54,7 @@ export const COLLECTION_SCHEMAS: CollectionSchema[] = [
   {
     collection: "projects",
     title: "Projects / ทะเบียนโครงการ",
-    description: "ข้อมูลโครงการหลัก ควรใช้ projectId เป็นตัวเชื่อมหลักแทนชื่อโครงการ",
+    description: "ข้อมูลโครงการและสรุปต้นทุนการเงินทั้งหมด ยอดสะสม ยอดคงเหลือ และสถิติวิเคราะห์",
     primaryKey: "projectId",
     orderBy: "projectCode",
     fields: [
@@ -72,19 +72,7 @@ export const COLLECTION_SCHEMAS: CollectionSchema[] = [
       { key: "endDate", label: "วันที่สิ้นสุด", type: "date" },
       { key: "status", label: "สถานะ", type: "select", options: activeStatusOptions },
       { key: "location", label: "สถานที่", type: "text" },
-    ],
-  },
-  {
-    collection: "project_costs",
-    title: "Project Costs / สรุปต้นทุนโครงการ",
-    description: "ตัวเลขการเงินของโครงการ ใช้โหลด Dashboard และรายงานโดยไม่ต้อง sum ทุกครั้ง",
-    primaryKey: "projectId",
-    orderBy: "projectName",
-    fields: [
-      { key: "projectId", label: "Project ID", type: "text", required: true },
-      { key: "projectName", label: "ชื่อโครงการ", type: "text", required: true },
-      { key: "contractBudget", label: "งบสัญญา", type: "number" },
-      { key: "pettyCashBudget", label: "งบเงินทดรอง", type: "number" },
+      // สรุปต้นทุนโครงการที่รวมเข้ามา
       { key: "totalAdvanceRequested", label: "ยอดขอเบิกสะสม", type: "number" },
       { key: "totalAdvanceApproved", label: "ยอดอนุมัติสะสม", type: "number" },
       { key: "totalClearingSubmitted", label: "ยอดส่งเคลียร์สะสม", type: "number" },
@@ -102,6 +90,85 @@ export const COLLECTION_SCHEMAS: CollectionSchema[] = [
       { key: "advanceExposure", label: "Advance Exposure", type: "number" },
       { key: "lastUpdatedAt", label: "อัปเดตล่าสุด", type: "datetime" },
     ],
+  },
+  {
+    collection: "vat_entries",
+    title: "VAT / ทะเบียนรายงานภาษีซื้อ",
+    description: "รายการภาษีซื้อสรุปบันทึกจากบิลเคลียร์เงินสดย่อยเพื่อรายงานส่งกรมสรรพากร",
+    primaryKey: "id",
+    orderBy: "date",
+    fields: [
+      { key: "id", label: "VAT Entry ID", type: "text", required: true },
+      { key: "date", label: "วันที่เอกสาร", type: "date", required: true },
+      { key: "invoiceNo", label: "เลขใบกำกับภาษี", type: "text" },
+      { key: "vendorName", label: "ผู้ขาย (Vendor)", type: "text" },
+      { key: "vendorTaxId", label: "เลขผู้เสียภาษี", type: "text" },
+      { key: "documentType", label: "ประเภทเอกสาร", type: "text" },
+      { key: "projectId", label: "Project ID", type: "text" },
+      { key: "projectName", label: "ชื่อโครงการ", type: "text" },
+      { key: "vatAmount", label: "ยอดภาษีซื้อ (VAT)", type: "number" },
+      { key: "netAmount", label: "ยอดเงินสุทธิ", type: "number" },
+      { key: "employeeName", label: "พนักงานผู้เบิก", type: "text" },
+      { key: "lastUpdatedAt", label: "เวลาที่อัปเดต", type: "datetime" }
+    ]
+  },
+  {
+    collection: "wht_entries",
+    title: "WHT / ทะเบียนรายงานภาษีหัก ณ ที่จ่าย",
+    description: "รายการภาษีหัก ณ ที่จ่าย 1%, 3%, 5% จากรายการบิลค่าบริการ",
+    primaryKey: "id",
+    orderBy: "date",
+    fields: [
+      { key: "id", label: "WHT Entry ID", type: "text", required: true },
+      { key: "date", label: "วันที่เอกสาร", type: "date", required: true },
+      { key: "invoiceNo", label: "เลขเอกสาร", type: "text" },
+      { key: "vendorName", label: "ผู้ขาย/ผู้ให้บริการ", type: "text" },
+      { key: "vendorTaxId", label: "เลขผู้เสียภาษี", type: "text" },
+      { key: "documentType", label: "ประเภทเอกสาร", type: "text" },
+      { key: "projectId", label: "Project ID", type: "text" },
+      { key: "projectName", label: "ชื่อโครงการ", type: "text" },
+      { key: "whtRate", label: "อัตราภาษี", type: "text" },
+      { key: "whtAmount", label: "ยอดภาษีหัก ณ ที่จ่าย", type: "number" },
+      { key: "netAmount", label: "ยอดเงินสุทธิ", type: "number" },
+      { key: "employeeName", label: "พนักงานผู้เบิก", type: "text" },
+      { key: "lastUpdatedAt", label: "เวลาที่อัปเดต", type: "datetime" }
+    ]
+  },
+  {
+    collection: "vendor_reports",
+    title: "Vendor Report / สรุปยอดเจ้าหนี้",
+    description: "สรุปยอดสะสมและประวัติยอดเงินของเจ้าหนี้แต่ละราย",
+    primaryKey: "id",
+    orderBy: "vendorName",
+    fields: [
+      { key: "id", label: "Vendor ID / Slug", type: "text", required: true },
+      { key: "vendorName", label: "ชื่อผู้ขาย/เจ้าหนี้", type: "text", required: true },
+      { key: "vendorTaxId", label: "เลขผู้เสียภาษี", type: "text" },
+      { key: "billCount", label: "จำนวนบิลสะสม", type: "number" },
+      { key: "netAmount", label: "ยอดเงินสุทธิสะสม", type: "number" },
+      { key: "vatAmount", label: "ภาษีซื้อสะสม", type: "number" },
+      { key: "whtAmount", label: "ภาษีหัก ณ ที่จ่ายสะสม", type: "number" },
+      { key: "lastUpdatedAt", label: "อัปเดตล่าสุด", type: "datetime" }
+    ]
+  },
+  {
+    collection: "employee_outstanding_reports",
+    title: "Employee Outstanding / ยอดคงค้างพนักงาน",
+    description: "สรุปเงินทดรองค้างเคลียร์สะสมของพนักงานแต่ละคน",
+    primaryKey: "id",
+    orderBy: "outstandingAmount",
+    fields: [
+      { key: "id", label: "Employee ID", type: "text", required: true },
+      { key: "employeeId", label: "รหัสพนักงาน", type: "text" },
+      { key: "employeeName", label: "ชื่อพนักงาน", type: "text" },
+      { key: "advanceCount", label: "จำนวน ADV ที่เบิก", type: "number" },
+      { key: "outstandingCount", label: "รายการค้างเคลียร์", type: "number" },
+      { key: "requestAmount", label: "ยอดขอเบิกรวม", type: "number" },
+      { key: "outstandingAmount", label: "ยอดคงค้างเคลียร์สะสม", type: "number" },
+      { key: "latestAdvId", label: "เลข ADV ล่าสุด", type: "text" },
+      { key: "latestDate", label: "วันที่เบิกล่าสุด", type: "text" },
+      { key: "lastUpdatedAt", label: "อัปเดตล่าสุด", type: "datetime" }
+    ]
   },
   {
     collection: "advances",
@@ -380,7 +447,10 @@ export const COLLECTION_SCHEMAS: CollectionSchema[] = [
 export const CORE_SHEET_COLLECTIONS = [
   "employees",
   "projects",
-  "project_costs",
+  "vat_entries",
+  "wht_entries",
+  "vendor_reports",
+  "employee_outstanding_reports",
   "advances",
   "clearingLogs",
   "clearingItems",

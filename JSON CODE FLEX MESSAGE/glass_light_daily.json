@@ -1,0 +1,301 @@
+{
+  "type": "bubble",
+  "size": "mega",
+  "header": {
+    "type": "box",
+    "layout": "vertical",
+    "backgroundColor": "#00A5E0",
+    "paddingAll": "16px",
+    "contents": [
+      {
+        "type": "text",
+        "text": "สรุปรายงานประจำวัน",
+        "weight": "bold",
+        "size": "xl",
+        "color": "#FFFFFF",
+        "align": "center"
+      },
+      {
+        "type": "text",
+        "text": "{summaryDate}",
+        "size": "lg",
+        "color": "#FFFFFF",
+        "align": "center",
+        "margin": "sm"
+      }
+    ]
+  },
+  "body": {
+    "type": "box",
+    "layout": "vertical",
+    "backgroundColor": "#FFFFFF",
+    "spacing": "sm",
+    "contents": [
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "spacing": "md",
+        "contents": [
+          {
+            "type": "box",
+            "layout": "vertical",
+            "flex": 1,
+            "spacing": "sm",
+            "contents": [
+              {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#32CBFF",
+                "cornerRadius": "16px",
+                "paddingAll": "8px",
+                "contents": [
+                  {
+                    "type": "text",
+                    "text": "ขอเบิกใหม่",
+                    "size": "xs",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  },
+                  {
+                    "type": "text",
+                    "text": "{newAdvanceCount}",
+                    "weight": "bold",
+                    "size": "md",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  }
+                ]
+              },
+              {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#89A1EF",
+                "cornerRadius": "16px",
+                "paddingAll": "8px",
+                "contents": [
+                  {
+                    "type": "text",
+                    "text": "รอโอนเงิน",
+                    "size": "xs",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  },
+                  {
+                    "type": "text",
+                    "text": "{pendingTransferCount}",
+                    "weight": "bold",
+                    "size": "md",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "box",
+            "layout": "vertical",
+            "flex": 1,
+            "spacing": "sm",
+            "contents": [
+              {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#A78BFA",
+                "cornerRadius": "16px",
+                "paddingAll": "8px",
+                "contents": [
+                  {
+                    "type": "text",
+                    "text": "รออนุมัติ",
+                    "size": "xs",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  },
+                  {
+                    "type": "text",
+                    "text": "{pendingApprovalCount}",
+                    "weight": "bold",
+                    "size": "md",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  }
+                ]
+              },
+              {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#EF9CDA",
+                "cornerRadius": "16px",
+                "paddingAll": "8px",
+                "contents": [
+                  {
+                    "type": "text",
+                    "text": "ปิดยอดแล้ว",
+                    "size": "xs",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  },
+                  {
+                    "type": "text",
+                    "text": "{closedTodayCount}",
+                    "weight": "bold",
+                    "size": "md",
+                    "color": "#FFFFFF",
+                    "align": "center"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "separator",
+        "margin": "lg",
+        "color": "#E6D7F4"
+      },
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "contents": [
+          {
+            "type": "text",
+            "text": "รายการรอเคลียร์สะสม",
+            "size": "sm",
+            "color": "#9A8477",
+            "flex": 6
+          },
+          {
+            "type": "text",
+            "text": "{pendingSettlementCount} รายการ",
+            "size": "sm",
+            "color": "#24324A",
+            "weight": "bold",
+            "flex": 4,
+            "align": "end"
+          }
+        ]
+      },
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "contents": [
+          {
+            "type": "text",
+            "text": "เอกสารสุ่มเสี่ยง",
+            "size": "sm",
+            "color": "#9A8477",
+            "flex": 6
+          },
+          {
+            "type": "text",
+            "text": "{riskDocumentCount} รายการ",
+            "size": "sm",
+            "color": "#DC2626",
+            "weight": "bold",
+            "flex": 4,
+            "align": "end"
+          }
+        ]
+      },
+      {
+        "type": "box",
+        "layout": "horizontal",
+        "contents": [
+          {
+            "type": "text",
+            "text": "ข้อมูลค้างเชื่อมโยง",
+            "size": "sm",
+            "color": "#9A8477",
+            "flex": 6
+          },
+          {
+            "type": "text",
+            "text": "{pendingSyncCount} รายการ",
+            "size": "sm",
+            "color": "#24324A",
+            "weight": "bold",
+            "flex": 4,
+            "align": "end"
+          }
+        ]
+      },
+      {
+        "type": "separator",
+        "margin": "lg",
+        "color": "#E6D7F4"
+      },
+      {
+        "type": "box",
+        "layout": "vertical",
+        "backgroundColor": "#FFFFFF",
+        "cornerRadius": "18px",
+        "paddingAll": "xs",
+        "margin": "xs",
+        "spacing": "sm",
+        "contents": [
+          {
+            "type": "text",
+            "text": "{pendingSettlementCount}",
+            "size": "xl",
+            "weight": "bold",
+            "color": "#00A5E0",
+            "align": "center"
+          },
+          {
+            "type": "text",
+            "text": "งานคงค้างทั้งหมดสะสมในระบบ",
+            "size": "xs",
+            "color": "#989898",
+            "align": "center",
+            "margin": "sm"
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "type": "box",
+    "layout": "horizontal",
+    "spacing": "xs",
+    "paddingAll": "none",
+    "backgroundColor": "#FECEF1",
+    "paddingBottom": "xl",
+    "paddingStart": "xl",
+    "paddingEnd": "xl",
+    "contents": [
+      {
+        "type": "button",
+        "style": "primary",
+        "color": "#00A5E0",
+        "action": {
+          "type": "uri",
+          "label": "เปิด Dashboard",
+          "uri": "{dashboardUrl}"
+        }
+      },
+      {
+        "type": "button",
+        "style": "primary",
+        "color": "#EF9CDA",
+        "action": {
+          "type": "uri",
+          "label": "รายการรอตรวจ",
+          "uri": "{accountingReviewListUrl}"
+        }
+      }
+    ]
+  },
+  "styles": {
+    "header": {
+      "backgroundColor": "#00A5E0"
+    },
+    "body": {
+      "backgroundColor": "#FECEF1"
+    },
+    "footer": {
+      "backgroundColor": "#FECEF1"
+    }
+  }
+}

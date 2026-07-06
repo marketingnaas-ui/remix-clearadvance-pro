@@ -2,9 +2,11 @@ import React, { useState, useEffect, useRef } from "react";
 import { doc, onSnapshot, updateDoc, collection, getDocs, query, where } from "firebase/firestore";
 import { db, hashPIN } from "../lib/firebase";
 import { Employee, UserRole } from "../types";
+import liff from "@line/liff";
 import { 
   User, CreditCard, Lock, Sparkles, Upload, RefreshCw, CheckCircle2, 
-  AlertCircle, ShieldCheck, Eye, EyeOff, Hash, Smile, BookOpen
+  AlertCircle, ShieldCheck, Eye, EyeOff, Hash, Smile, BookOpen,
+  Link, MessageSquare, Link2
 } from "lucide-react";
 
 interface ProfileSettingsProps {
@@ -33,6 +35,11 @@ export default function ProfileSettings({ currentEmployee, onProfileUpdate }: Pr
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // LINE LIFF states for profile linking
+  const [liffProfile, setLiffProfile] = useState<any>(null);
+  const [liffLoading, setLiffLoading] = useState(false);
+  const [liffError, setLiffError] = useState<string | null>(null);
 
   // Edit fields
   const [name, setName] = useState("");
@@ -100,6 +107,140 @@ export default function ProfileSettings({ currentEmployee, onProfileUpdate }: Pr
 
     return () => unsub();
   }, [currentEmployee.id]);
+
+  // Initialize LINE LIFF for Profile Linking
+  useEffect(() => {
+    const initLiffInProfile = async () => {
+      try {
+        const settingsSnapshot = await getDocs(collection(db, "settings"));
+        let lId = "";
+        settingsSnapshot.forEach((doc) => {
+          if (doc.id === "global") {
+            const data = doc.data();
+            lId = data?.lineMessagingConfig?.liffId || data?.lineConfig?.liffId || "";
+          }
+        });
+        
+        if (lId && lId !== "123456-abcde" && lId !== "{LIFF_ID}") {
+          await liff.init({ liffId: lId });
+          if (liff.isLoggedIn()) {
+            const profile = await liff.getProfile();
+            setLiffProfile(profile);
+            if (profile.userId && profile.userId.startsWith("U") && !lineUserId) {
+              setLineUserId(profile.userId);
+            }
+          }
+        }
+      } catch (err: any) {
+        console.error("LIFF init in profile settings failed:", err);
+        setLiffError(err?.message || String(err));
+      }
+    };
+    initLiffInProfile();
+  }, [lineUserId]);
+
+  const handleLinkLine = async () => {
+    setLiffLoading(true);
+    setError(null);
+    try {
+      const settingsSnapshot = await getDocs(collection(db, "settings"));
+      let lId = "";
+      settingsSnapshot.forEach((doc) => {
+        if (doc.id === "global") {
+          const data = doc.data();
+          lId = data?.lineMessagingConfig?.liffId || data?.lineConfig?.liffId || "";
+        }
+      });
+
+      if (!lId || lId === "123456-abcde" || lId === "{LIFF_ID}") {
+        throw new Error("ยังไม่มีการตั้งค่า LINE LIFF ID ในระบบ หรือกำลังใช้ค่าตัวอย่าง กรุณาติดต่อแอดมิน");
+      }
+
+      if (!liff.id) {
+        await liff.init({ liffId: lId });
+      }
+
+      if (!liff.isLoggedIn()) {
+        liff.login({ redirectUri: window.location.href });
+        return;
+      }
+
+      const profile = await liff.getProfile();
+      if (profile && profile.userId) {
+        if (!profile.userId.startsWith("U")) {
+          throw new Error("รหัสผู้ใช้งาน LINE (User ID) ไม่ถูกต้อง ต้องขึ้นต้นด้วยอักษร U เท่านั้น");
+        }
+
+        // Update local state
+        setLineUserId(profile.userId);
+        setLiffProfile(profile);
+
+        // Update in DB instantly
+        const empRef = doc(db, "employees", currentEmployee.id);
+        const updatePayload = {
+          lineUserId: profile.userId,
+          lineDisplayName: profile.displayName || "",
+          linePictureUrl: profile.pictureUrl || "",
+          lineLinked: true,
+          lineLinkedAt: new Date().toISOString()
+        };
+        await updateDoc(empRef, updatePayload);
+
+        // If onProfileUpdate callback is available, notify parent
+        if (empData) {
+          onProfileUpdate({
+            ...empData,
+            ...updatePayload
+          });
+        }
+
+        setSuccess("เชื่อมโยงบัญชี LINE ของคุณเรียบร้อยแล้ว! 🎉");
+        setTimeout(() => setSuccess(null), 5000);
+      } else {
+        throw new Error("ไม่สามารถดึงข้อมูลโปรไฟล์จาก LINE ได้");
+      }
+    } catch (err: any) {
+      console.error("Link LINE failed:", err);
+      setError("เชื่อมโยงบัญชี LINE ไม่สำเร็จ: " + (err.message || String(err)));
+    } finally {
+      setLiffLoading(false);
+    }
+  };
+
+  const handleUnlinkLine = async () => {
+    if (!confirm("คุณแน่ใจหรือไม่ที่จะยกเลิกการเชื่อมโยงบัญชี LINE? การทำเช่นนี้จะทำให้คุณไม่สามารถทำรายการหรือรับแจ้งเตือนผ่าน LINE ได้")) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const empRef = doc(db, "employees", currentEmployee.id);
+      const unlinkPayload = {
+        lineUserId: "",
+        lineDisplayName: "",
+        linePictureUrl: "",
+        lineLinked: false,
+        lineLinkedAt: ""
+      };
+      await updateDoc(empRef, unlinkPayload);
+      
+      setLineUserId("");
+      setLiffProfile(null);
+      if (empData) {
+        onProfileUpdate({
+          ...empData,
+          ...unlinkPayload
+        });
+      }
+      setSuccess("ยกเลิกการเชื่อมโยงบัญชี LINE เรียบร้อยแล้ว");
+      setTimeout(() => setSuccess(null), 5000);
+    } catch (err: any) {
+      console.error("Unlink LINE failed:", err);
+      setError("ไม่สามารถยกเลิกการเชื่อมโยงได้: " + (err.message || err));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleBankChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
@@ -687,6 +828,80 @@ export default function ProfileSettings({ currentEmployee, onProfileUpdate }: Pr
               </div>
             </div>
           </div>
+        </div>
+
+        {/* LINE Account Connection Card */}
+        <div className="bg-white border border-stone-200 rounded-2xl p-6 shadow-xs space-y-6">
+          <h3 className="text-xs font-black text-stone-950 uppercase tracking-widest border-b pb-2 flex items-center gap-1.5">
+            <MessageSquare className="w-4 h-4 text-stone-700" /> การเชื่อมต่อบัญชี LINE (LINE Account Connection)
+          </h3>
+
+          {empData?.lineUserId || lineUserId ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 p-2 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-800">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>LINE Connected (เชื่อมต่อบัญชี LINE สำเร็จแล้ว)</span>
+              </div>
+              
+              <div className="flex items-center gap-4 p-4 bg-stone-50 rounded-xl border border-stone-100">
+                {empData?.linePictureUrl || liffProfile?.pictureUrl ? (
+                  <img 
+                    src={empData?.linePictureUrl || liffProfile?.pictureUrl} 
+                    alt="LINE Profile" 
+                    className="w-16 h-16 rounded-full border border-stone-200 shadow-sm"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-16 h-16 rounded-full bg-stone-200 flex items-center justify-center text-stone-500">
+                    <User className="w-8 h-8" />
+                  </div>
+                )}
+                
+                <div className="flex-1 space-y-1">
+                  <div className="text-xs">
+                    <span className="font-extrabold text-stone-400 uppercase tracking-wider block">LINE Display Name</span>
+                    <span className="font-bold text-stone-900 text-sm">{empData?.lineDisplayName || liffProfile?.displayName || "ไม่ได้ระบุชื่อ"}</span>
+                  </div>
+                  <div className="text-xs">
+                    <span className="font-extrabold text-stone-400 uppercase tracking-wider block">LINE User ID</span>
+                    <span className="font-mono text-stone-850 font-bold break-all">{empData?.lineUserId || lineUserId}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleUnlinkLine}
+                  className="px-4 py-2 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 text-xs font-bold rounded-xl transition"
+                >
+                  ยกเลิกการเชื่อมบัญชี LINE
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 p-2 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold text-amber-800">
+                <AlertCircle className="w-4 h-4 text-amber-600" />
+                <span>ยังไม่ได้เชื่อมบัญชี LINE (Still not connected)</span>
+              </div>
+              <p className="text-xs text-stone-500 leading-relaxed font-medium">
+                เชื่อมต่อบัญชี LINE ของคุณกับระบบเพื่อรับการแจ้งเตือนสถานะใบเบิก และอนุมัติผ่าน LINE LIFF ได้อย่างสะดวกรวดเร็ว
+              </p>
+              
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={liffLoading}
+                  onClick={handleLinkLine}
+                  className="px-5 py-3 bg-stone-950 text-white font-bold text-xs rounded-xl hover:bg-stone-900 transition shadow-sm flex items-center gap-2 disabled:opacity-60"
+                >
+                  {liffLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Link className="w-3.5 h-3.5" />}
+                  <span>เชื่อมบัญชี LINE</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Bank Account Settings Card */}

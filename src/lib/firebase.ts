@@ -5,9 +5,12 @@
 
 import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously } from "firebase/auth";
-import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
+import { getFirestore, doc, getDocFromServer, setLogLevel } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import firebaseConfig from "../../firebase-applet-config.json";
+
+// Set log level to reduce non-error logging in the browser console
+setLogLevel("error");
 
 // Initialize Firebase App
 const firebaseParams = {

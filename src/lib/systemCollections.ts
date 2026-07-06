@@ -72,24 +72,10 @@ export async function autoUpdateSystemCollections(): Promise<void> {
 
     for (const projName of projectsSet) {
       const details = projectDetails[projName] || {};
-      const projDocRef = doc(db, "projects", slugify(projName));
-      await batch.set(projDocRef, {
-        id: slugify(projName),
-        name: projName,
-        projectId: details.projectId || slugify(projName).toUpperCase(),
-        contractBudget: Number(details.contractBudget || projectBudgets[projName] || 0),
-        pettyCashBudget: Number(details.pettyCashBudget || 0),
-        aiReasoning: details.aiReasoning || "สร้างอัตโนมัติจากระบบส่วนกลาง",
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
-    }
-
-    // 3. Synchronize "project_costs" collection (รายงานต้นทุน)
-    for (const projName of projectsSet) {
       const projAdvances = advances.filter(a => a.projectId === projName);
       
-      const contractBudget = Number(projectDetails[projName]?.contractBudget || projectBudgets[projName] || 0);
-      const pettyCashBudget = Number(projectDetails[projName]?.pettyCashBudget || 0);
+      const contractAmount = Number(details.contractAmount || details.contractBudget || projectBudgets[projName] || 0);
+      const pettyCashBudget = Number(details.pettyCashBudget || 0);
 
       // Sum requestAmount for requested advances (excludes rejected ones)
       const totalAdvanceRequested = projAdvances.reduce((sum, a) => {
@@ -118,22 +104,38 @@ export async function autoUpdateSystemCollections(): Promise<void> {
         return sum + Number(a.approvedClearingAmountTotal || 0);
       }, 0);
 
-      const remainingPettyCashBudget = pettyCashBudget - totalClearingApproved;
-      const variance = contractBudget - totalClearingApproved;
+      // Outstanding Amount is total approved advances minus total approved clearing
+      const outstandingAmount = Math.max(0, totalAdvanceApproved - totalClearingApproved);
 
-      const costDocRef = doc(db, "project_costs", slugify(projName));
-      await batch.set(costDocRef, {
+      const remainingPettyCashBudget = pettyCashBudget - totalClearingApproved;
+      const variance = contractAmount - totalClearingApproved;
+
+      const projDocRef = doc(db, "projects", slugify(projName));
+      await batch.set(projDocRef, {
         id: slugify(projName),
+        projectId: details.projectId || slugify(projName).toUpperCase(),
+        projectCode: details.projectCode || slugify(projName).toUpperCase(),
         projectName: projName,
-        contractBudget,
-        pettyCashBudget,
+        companyName: details.companyName || "บริษัท จำกัด",
+        clientName: details.clientName || "ลูกค้าทั่วไป",
+        contractAmount: contractAmount,
+        budget: details.budget || contractAmount,
+        pettyCashBudget: pettyCashBudget,
+        aiReasoning: details.aiReasoning || "สร้างอัตโนมัติจากระบบส่วนกลาง",
+        startDate: details.startDate || new Date().toISOString().split("T")[0],
+        endDate: details.endDate || new Date().toISOString().split("T")[0],
+        status: details.status || "ACTIVE",
+        location: details.location || "กรุงเทพฯ",
+        
+        // Merged cost parameters
         totalAdvanceRequested,
         totalAdvanceApproved,
         totalClearingSubmitted,
         totalClearingApproved,
+        outstandingAmount,
         remainingPettyCashBudget,
         variance,
-        lastUpdated: new Date().toISOString()
+        lastUpdatedAt: new Date().toISOString()
       }, { merge: true });
     }
 

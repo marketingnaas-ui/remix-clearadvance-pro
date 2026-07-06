@@ -1,3 +1,45 @@
+// Sanitize console arguments to prevent "JSON.stringify cannot serialize cyclic structures" errors
+// when the AI Studio iframe interceptor captures warning/error/log messages.
+const sanitizeConsoleArgs = (args: any[]) => {
+  const seen = new WeakSet();
+  const safeClone = (val: any): any => {
+    if (val === null || typeof val !== 'object') return val;
+    if (val instanceof Error) {
+      return { name: val.name, message: val.message, stack: val.stack };
+    }
+    if (typeof Node !== "undefined" && val instanceof Node) {
+      return `[DOMNode: ${val.nodeName}]`;
+    }
+    if (seen.has(val)) return '[Circular]';
+    seen.add(val);
+    if (Array.isArray(val)) return val.map(safeClone);
+    const copy: any = {};
+    for (const key of Object.keys(val)) {
+      try {
+        copy[key] = safeClone(val[key]);
+      } catch {
+        copy[key] = '[Unreadable]';
+      }
+    }
+    return copy;
+  };
+  return args.map(safeClone);
+};
+
+const wrapConsole = (method: 'log' | 'warn' | 'error' | 'info') => {
+  const original = console[method];
+  if (original) {
+    console[method] = function(...args: any[]) {
+      original.apply(this, sanitizeConsoleArgs(args));
+    };
+  }
+};
+
+wrapConsole('log');
+wrapConsole('warn');
+wrapConsole('error');
+wrapConsole('info');
+
 import {StrictMode, Component, type ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
@@ -126,7 +168,7 @@ window.addEventListener("unhandledrejection", (event) => {
     }
   }
   
-  if (reasonMsg.includes("vite") || reasonMsg.includes("websocket")) return;
+  if (reasonMsg.includes("vite") || reasonMsg.includes("websocket") || (reasonStack && (reasonStack.includes("vite") || reasonStack.includes("websocket")))) return;
   console.error("Global captured promise rejection:", reasonMsg, reasonStack ? `\nStack: ${reasonStack}` : "");
   console.error("Raw promise rejection object:", reason);
 });

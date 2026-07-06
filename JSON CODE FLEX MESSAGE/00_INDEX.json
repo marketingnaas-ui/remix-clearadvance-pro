@@ -1,0 +1,157 @@
+{
+  "name": "Advance Pro LINE Flex Messages - Modern Glass Apple UI",
+  "total": 25,
+  "style": "modern glass apple ui / soft corporate / teal",
+  "files": [
+    {
+      "no": 1,
+      "event": "ADVANCE_SUBMITTED",
+      "file": "01_ADVANCE_SUBMITTED.json",
+      "altText": "มีคำขอเบิกเงินใหม่ - {advNo}"
+    },
+    {
+      "no": 2,
+      "event": "ADVANCE_APPROVED",
+      "file": "02_ADVANCE_APPROVED.json",
+      "altText": "อนุมัติคำขอเบิกแล้ว - {advNo}"
+    },
+    {
+      "no": 3,
+      "event": "ADVANCE_REJECTED",
+      "file": "03_ADVANCE_REJECTED.json",
+      "altText": "คำขอเบิกไม่อนุมัติ - {advNo}"
+    },
+    {
+      "no": 4,
+      "event": "TRANSFER_SLIP_ATTACHED",
+      "file": "04_TRANSFER_SLIP_ATTACHED.json",
+      "altText": "โอนเงินทดรองจ่ายแล้ว - {advNo}"
+    },
+    {
+      "no": 5,
+      "event": "SETTLEMENT_DRAFT_CREATED",
+      "file": "05_SETTLEMENT_DRAFT_CREATED.json",
+      "altText": "บันทึกร่างใบเคลียร์ยอดแล้ว - {settlementNo}"
+    },
+    {
+      "no": 6,
+      "event": "SETTLEMENT_SUBMITTED",
+      "file": "06_SETTLEMENT_SUBMITTED.json",
+      "altText": "มีรายการเคลียร์ยอดรอตรวจ - {settlementNo}"
+    },
+    {
+      "no": 7,
+      "event": "SETTLEMENT_REJECTED_FOR_REVISION",
+      "file": "07_SETTLEMENT_REJECTED_FOR_REVISION.json",
+      "altText": "เอกสารถูกตีกลับให้แก้ไข - {settlementNo}"
+    },
+    {
+      "no": 8,
+      "event": "SETTLEMENT_CLOSED",
+      "file": "08_SETTLEMENT_CLOSED.json",
+      "altText": "ปิดยอดเคลียร์เงินแล้ว - {settlementNo}"
+    },
+    {
+      "no": 9,
+      "event": "REFUND_TO_COMPANY_REQUIRED",
+      "file": "09_REFUND_TO_COMPANY_REQUIRED.json",
+      "altText": "มีเงินทอนต้องคืนบริษัท - {settlementNo}"
+    },
+    {
+      "no": 10,
+      "event": "REIMBURSE_TO_EMPLOYEE_REQUIRED",
+      "file": "10_REIMBURSE_TO_EMPLOYEE_REQUIRED.json",
+      "altText": "มีรายการเบิกเพิ่มให้พนักงาน - {settlementNo}"
+    },
+    {
+      "no": 11,
+      "event": "PDF_GENERATED",
+      "file": "11_PDF_GENERATED.json",
+      "altText": "สร้างเอกสาร PDF แล้ว - {documentNo}"
+    },
+    {
+      "no": 12,
+      "event": "DOCUMENT_REPOSITORY_UPDATED",
+      "file": "12_DOCUMENT_REPOSITORY_UPDATED.json",
+      "altText": "คลังเอกสารถูกอัปเดต - {advNo}"
+    },
+    {
+      "no": 13,
+      "event": "DUPLICATE_DOCUMENT_DETECTED",
+      "file": "13_DUPLICATE_DOCUMENT_DETECTED.json",
+      "altText": "พบเอกสารที่อาจถูกใช้ซ้ำ - {settlementNo}"
+    },
+    {
+      "no": 14,
+      "event": "OCR_VALUE_EDITED",
+      "file": "14_OCR_VALUE_EDITED.json",
+      "altText": "มีการแก้ไขข้อมูลหลัง OCR - {settlementNo}"
+    },
+    {
+      "no": 15,
+      "event": "DOCUMENT_TAMPERING_RISK_DETECTED",
+      "file": "15_DOCUMENT_TAMPERING_RISK_DETECTED.json",
+      "altText": "พบความเสี่ยงเอกสารถูกแก้ไข - {settlementNo}"
+    },
+    {
+      "no": 16,
+      "event": "OCR_FAILED",
+      "file": "16_OCR_FAILED.json",
+      "altText": "ระบบไม่สามารถอ่านเอกสารนี้ได้ - {settlementNo}"
+    },
+    {
+      "no": 17,
+      "event": "GOOGLE_SHEETS_SYNC_FAILED",
+      "file": "17_GOOGLE_SHEETS_SYNC_FAILED.json",
+      "altText": "Google Sheets Sync ไม่สำเร็จ - {failedAt}"
+    },
+    {
+      "no": 18,
+      "event": "GOOGLE_SHEETS_SYNC_RECOVERED",
+      "file": "18_GOOGLE_SHEETS_SYNC_RECOVERED.json",
+      "altText": "Google Sheets Sync กลับมาทำงานแล้ว - {lastSyncAt}"
+    },
+    {
+      "no": 19,
+      "event": "GEMINI_API_USAGE_ALERT",
+      "file": "19_GEMINI_API_USAGE_ALERT.json",
+      "altText": "แจ้งเตือนการใช้งาน Gemini API - {usageDate}"
+    },
+    {
+      "no": 20,
+      "event": "SYSTEM_SETTING_CHANGED",
+      "file": "20_SYSTEM_SETTING_CHANGED.json",
+      "altText": "มีการเปลี่ยนแปลงการตั้งค่าระบบ - {settingTopic}"
+    },
+    {
+      "no": 21,
+      "event": "ACCESS_USER_CHANGED",
+      "file": "21_ACCESS_USER_CHANGED.json",
+      "altText": "มีการเปลี่ยนแปลงผู้มีสิทธิ์ในระบบ - {accessChangeType}"
+    },
+    {
+      "no": 22,
+      "event": "LINE_ACTION_ALREADY_PROCESSED",
+      "file": "22_LINE_ACTION_ALREADY_PROCESSED.json",
+      "altText": "ทำรายการไม่ได้ - {documentNo}"
+    },
+    {
+      "no": 23,
+      "event": "LINE_UNAUTHORIZED_USER",
+      "file": "23_LINE_UNAUTHORIZED_USER.json",
+      "altText": "ไม่พบสิทธิ์การใช้งาน - {lineUserId}"
+    },
+    {
+      "no": 24,
+      "event": "MANUAL_SYNC_TRIGGERED",
+      "file": "24_MANUAL_SYNC_TRIGGERED.json",
+      "altText": "มีการสั่ง Manual Sync - {triggeredAt}"
+    },
+    {
+      "no": 25,
+      "event": "DAILY_ACCOUNTING_SUMMARY",
+      "file": "25_DAILY_ACCOUNTING_SUMMARY.json",
+      "altText": "สรุปงาน Advance วันนี้ - {summaryDate}"
+    }
+  ]
+}

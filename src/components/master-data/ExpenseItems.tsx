@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { collection, query, onSnapshot, doc, orderBy } from "firebase/firestore";
+import { collection, query, onSnapshot, doc, orderBy, writeBatch } from "firebase/firestore";
 import { db } from "../../lib/firebase";
 import { ClearingItem } from "../../types";
 import { 
@@ -16,13 +16,16 @@ import {
   RefreshCw,
   Eye,
   FileText,
-  Building
-, X } from "lucide-react";
+  Building,
+  Trash2,
+  X 
+} from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as XLSX from "xlsx";
 
 export default function ExpenseItems() {
   const [items, setItems] = useState<ClearingItem[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -30,8 +33,11 @@ export default function ExpenseItems() {
   useEffect(() => {
     const q = query(collection(db, "clearingItems"), orderBy("createdAt", "desc"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ClearingItem));
+      const data = snapshot.docs.map(docSnap => ({ ...docSnap.data(), id: docSnap.id } as ClearingItem));
       setItems(data);
+      setLoading(false);
+    }, (err) => {
+      console.error("Error subscribing to expense items:", err);
       setLoading(false);
     });
     return () => unsubscribe();
@@ -55,6 +61,28 @@ export default function ExpenseItems() {
     XLSX.writeFile(wb, `expense_items_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    const validIds = selectedIds.filter(id => id && typeof id === "string" && id.trim() !== "");
+    if (validIds.length === 0) {
+      alert("ไม่มีรายการที่เลือกที่ถูกต้องเพื่อลบ");
+      return;
+    }
+    if (window.confirm(`คุณแน่ใจหรือไม่ที่จะลบรายการค่าใช้จ่ายที่เลือกทั้งหมด ${validIds.length} รายการอย่างถาวร? การลบนี้จะไม่สามารถกู้คืนได้`)) {
+      try {
+        const batch = writeBatch(db);
+        validIds.forEach((id) => {
+          batch.delete(doc(db, "clearingItems", id));
+        });
+        await batch.commit();
+        setSelectedIds([]);
+      } catch (error) {
+        console.error("Error bulk deleting expense items:", error);
+        alert("เกิดข้อผิดพลาดในการลบรายการค่าใช้จ่ายแบบกลุ่ม");
+      }
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-stone-50/50">
       <div className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-stone-200 px-4 py-3 flex items-center justify-between">
@@ -67,7 +95,7 @@ export default function ExpenseItems() {
         </button>
       </div>
 
-      <div className="p-4 space-y-4">
+      <div className="p-4 space-y-4 flex-1 overflow-y-auto">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
           <input 
@@ -78,6 +106,40 @@ export default function ExpenseItems() {
             className="w-full pl-9 pr-4 py-2.5 bg-white border border-stone-200 rounded-2xl text-sm focus:ring-2 focus:ring-stone-900/5 transition shadow-sm"
           />
         </div>
+
+        {/* Selection Control */}
+        {!loading && filteredItems.length > 0 && (
+          <div className="py-2 px-3 flex items-center justify-between border border-stone-200 rounded-2xl bg-white shadow-xs">
+            <div className="flex items-center gap-2">
+              <input 
+                type="checkbox"
+                checked={filteredItems.length > 0 && selectedIds.length === filteredItems.length}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setSelectedIds(filteredItems.map(item => item.id));
+                  } else {
+                    setSelectedIds([]);
+                  }
+                }}
+                className="w-4 h-4 accent-stone-900 rounded cursor-pointer"
+                id="select-all-expenses"
+              />
+              <label htmlFor="select-all-expenses" className="text-xs text-stone-500 font-bold select-none cursor-pointer">
+                เลือกทั้งหมด ({selectedIds.length}/{filteredItems.length})
+              </label>
+            </div>
+
+            {selectedIds.length > 0 && (
+              <button 
+                type="button"
+                onClick={handleBulkDelete}
+                className="px-3 py-1.5 bg-red-50 text-red-600 border border-red-100 rounded-xl text-[10px] font-bold hover:bg-red-100 transition flex items-center gap-1 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" /> ลบที่เลือก
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="space-y-3 pb-20">
           {loading ? (
@@ -95,63 +157,81 @@ export default function ExpenseItems() {
               <motion.div 
                 layout
                 key={item.id}
-                className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden"
+                className={`bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden transition-all ${
+                  selectedIds.includes(item.id) ? "border-stone-400 bg-stone-50/50 ring-1 ring-stone-900/5" : ""
+                }`}
               >
-                <div className="p-4 space-y-3">
-                  <div className="flex justify-between items-start">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <span className="text-[9px] font-black text-stone-400 bg-stone-100 px-1.5 py-0.5 rounded-md uppercase">{item.documentType}</span>
-                        {item.isDuplicate && (
-                          <span className="text-[9px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-md flex items-center gap-0.5">
-                            <AlertCircle className="w-2.5 h-2.5" /> ซ้ำ
-                          </span>
-                        )}
+                <div className="p-4 space-y-3 flex gap-3">
+                  <div className="flex items-start pt-1">
+                    <input 
+                      type="checkbox"
+                      checked={selectedIds.includes(item.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedIds(prev => [...prev, item.id]);
+                        } else {
+                          setSelectedIds(prev => prev.filter(id => id !== item.id));
+                        }
+                      }}
+                      className="w-4 h-4 accent-stone-900 rounded cursor-pointer shrink-0"
+                    />
+                  </div>
+                  <div className="flex-1 space-y-3 min-w-0">
+                    <div className="flex justify-between items-start">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="text-[9px] font-black text-stone-400 bg-stone-100 px-1.5 py-0.5 rounded-md uppercase">{item.documentType}</span>
+                          {item.isDuplicate && (
+                            <span className="text-[9px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-md flex items-center gap-0.5">
+                              <AlertCircle className="w-2.5 h-2.5" /> ซ้ำ
+                            </span>
+                          )}
+                        </div>
+                        <h4 className="font-bold text-stone-900 truncate">{item.itemName}</h4>
+                        <div className="flex items-center gap-2 mt-1">
+                          <p className="text-[10px] text-stone-500 font-medium flex items-center gap-1">
+                            <Building className="w-3 h-3" /> {item.vendorName}
+                          </p>
+                          <span className="text-[10px] text-stone-300">•</span>
+                          <p className="text-[10px] text-stone-500 font-medium">{item.advId}</p>
+                        </div>
                       </div>
-                      <h4 className="font-bold text-stone-900 truncate">{item.itemName}</h4>
-                      <div className="flex items-center gap-2 mt-1">
-                        <p className="text-[10px] text-stone-500 font-medium flex items-center gap-1">
-                          <Building className="w-3 h-3" /> {item.vendorName}
+                      <div className="text-right">
+                        <p className="text-xs font-black text-stone-900">฿{item.netAmount?.toLocaleString()}</p>
+                        <p className="text-[9px] text-stone-400 font-bold uppercase mt-1">Net Amount</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 py-3 border-y border-stone-50">
+                      <div className="space-y-0.5">
+                        <p className="text-[9px] text-stone-400 font-bold uppercase">VAT</p>
+                        <p className="text-[10px] font-bold text-stone-700">฿{item.vatAmount?.toLocaleString()}</p>
+                      </div>
+                      <div className="space-y-0.5">
+                        <p className="text-[9px] text-stone-400 font-bold uppercase">WHT</p>
+                        <p className="text-[10px] font-bold text-stone-700">฿{item.whtAmount?.toLocaleString()}</p>
+                      </div>
+                      <div className="space-y-0.5 text-right">
+                        <p className="text-[9px] text-stone-400 font-bold uppercase">OCR</p>
+                        <p className={`text-[10px] font-bold ${item.ocrConfidence > 0.8 ? "text-emerald-600" : "text-amber-600"}`}>
+                          {(item.ocrConfidence * 100).toFixed(0)}%
                         </p>
-                        <span className="text-[10px] text-stone-300">•</span>
-                        <p className="text-[10px] text-stone-500 font-medium">{item.advId}</p>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-xs font-black text-stone-900">฿{item.netAmount?.toLocaleString()}</p>
-                      <p className="text-[9px] text-stone-400 font-bold uppercase mt-1">Net Amount</p>
-                    </div>
-                  </div>
 
-                  <div className="grid grid-cols-3 gap-2 py-3 border-y border-stone-50">
-                    <div className="space-y-0.5">
-                      <p className="text-[9px] text-stone-400 font-bold uppercase">VAT</p>
-                      <p className="text-[10px] font-bold text-stone-700">฿{item.vatAmount?.toLocaleString()}</p>
-                    </div>
-                    <div className="space-y-0.5">
-                      <p className="text-[9px] text-stone-400 font-bold uppercase">WHT</p>
-                      <p className="text-[10px] font-bold text-stone-700">฿{item.whtAmount?.toLocaleString()}</p>
-                    </div>
-                    <div className="space-y-0.5 text-right">
-                      <p className="text-[9px] text-stone-400 font-bold uppercase">OCR</p>
-                      <p className={`text-[10px] font-bold ${item.ocrConfidence > 0.8 ? "text-emerald-600" : "text-amber-600"}`}>
-                        {(item.ocrConfidence * 100).toFixed(0)}%
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] text-stone-400 font-medium flex items-center gap-1">
+                        <Calendar className="w-3 h-3" /> {item.documentDate}
                       </p>
+                      {item.imageUrl && (
+                        <button 
+                          onClick={() => setSelectedImage(item.imageUrl!)}
+                          className="text-[10px] font-bold text-stone-900 flex items-center gap-1.5 bg-stone-100 hover:bg-stone-200 px-3 py-1.5 rounded-xl transition"
+                        >
+                          <Eye className="w-3.5 h-3.5" /> ดูใบเสร็จ
+                        </button>
+                      )}
                     </div>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <p className="text-[10px] text-stone-400 font-medium flex items-center gap-1">
-                      <Calendar className="w-3 h-3" /> {item.documentDate}
-                    </p>
-                    {item.imageUrl && (
-                      <button 
-                        onClick={() => setSelectedImage(item.imageUrl!)}
-                        className="text-[10px] font-bold text-stone-900 flex items-center gap-1.5 bg-stone-100 hover:bg-stone-200 px-3 py-1.5 rounded-xl transition"
-                      >
-                        <Eye className="w-3.5 h-3.5" /> ดูใบเสร็จ
-                      </button>
-                    )}
                   </div>
                 </div>
               </motion.div>

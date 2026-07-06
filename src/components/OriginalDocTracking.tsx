@@ -97,7 +97,7 @@ export default function OriginalDocTracking({ currentEmployee }: OriginalDocTrac
               id: vaultId,
               advId: parentAdv.advId,
               fileType: "SETTLEMENT",
-              fileUrl: "https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?q=80&w=600",
+              fileUrl: "",
               fileName: `settlement-summary-final-${parentAdv.advId}.txt`,
               uploadedBy: "SYSTEM",
               uploadedAt: new Date().toISOString(),

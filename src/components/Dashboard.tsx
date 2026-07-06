@@ -8,6 +8,7 @@ import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, serverTim
 import { db } from "../lib/firebase";
 import { handleFirestoreError, OperationType } from "../lib/errorUtils";
 import { Advance, AdvanceStatus, Employee, UserRole, ActionType, AuditLog } from "../types";
+import { checkApprovalPermission } from "../lib/permissionEngine";
 import ClearanceSchedule from "./dashboard/ClearanceSchedule";
 import { exportToExcel } from "../lib/excelExport";
 import { motion } from "motion/react";
@@ -56,6 +57,17 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [draftClearingLogs, setDraftClearingLogs] = useState<any[]>([]);
+  const [globalSettings, setGlobalSettings] = useState<any>(null);
+
+  // Real-time listener for global settings/rules
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "settings", "global"), (snap) => {
+      if (snap.exists()) {
+        setGlobalSettings(snap.data());
+      }
+    });
+    return () => unsub();
+  }, []);
 
   // Search & Filter state (for Accountant and general views)
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -64,13 +76,44 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
 
   // Interaction Modals / States
   const [selectedAdv, setSelectedAdv] = useState<Advance | null>(null);
+
+  const navigateToTransaction = (advId: string) => {
+    const adv = advances.find(a => a.advId === advId);
+    if (!adv) {
+      onNavigate("audit");
+      return;
+    }
+
+    // Determine navigation target based on role and status
+    if (currentEmployee.role === UserRole.MANAGER || currentEmployee.role === UserRole.ADMIN) {
+      if (adv.status === AdvanceStatus.PENDING_APPROVAL) {
+        onNavigate("approval");
+        return;
+      }
+    }
+
+    if (currentEmployee.role === UserRole.ACCOUNTANT) {
+      if (adv.status === AdvanceStatus.WAITING_TRANSFER || adv.status === AdvanceStatus.PENDING_AUDIT) {
+        onNavigate("accounting");
+        return;
+      }
+    }
+
+    if (adv.status === AdvanceStatus.WAITING_CLEARANCE || adv.status === AdvanceStatus.PARTIALLY_CLEARED || adv.status === AdvanceStatus.RETURNED) {
+      onNavigate("clearance");
+      return;
+    }
+
+    onNavigate("audit");
+  };
+
   const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
   const [isRejectModalOpen, setIsRejectModalOpen] = useState<boolean>(false);
   const [rejectionReason, setRejectionReason] = useState<string>("");
   const [actionLoading, setActionLoading] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [dashboardImage, setDashboardImage] = useState<string>(currentEmployee.profilePhotoURL || currentEmployee.profileImage || "");
+  const [dashboardImage, setDashboardImage] = useState<string>(currentEmployee.profilePhotoURL || currentEmployee.profileImage || currentEmployee.linePictureUrl || "");
   const [isEditingImage, setIsEditingImage] = useState<boolean>(false);
   const [imageScale, setImageScale] = useState<number>(currentEmployee.imageScale || 1);
   const [imagePosition, setImagePosition] = useState<{x: number, y: number}>(currentEmployee.imagePosition || {x: 50, y: 50});
@@ -102,18 +145,20 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
   }, [successMessage, errorMessage]);
 
   useEffect(() => {
-    setDashboardImage(currentEmployee.profilePhotoURL || currentEmployee.profileImage || "");
+    setDashboardImage(currentEmployee.profilePhotoURL || currentEmployee.profileImage || currentEmployee.linePictureUrl || "");
     setImageScale(currentEmployee.imageScale || 1);
     setImagePosition(currentEmployee.imagePosition || { x: 50, y: 50 });
   }, [
     currentEmployee.profilePhotoURL,
     currentEmployee.profileImage,
+    currentEmployee.linePictureUrl,
     currentEmployee.imageScale,
     currentEmployee.imagePosition,
   ]);
 
   // Notification Drawer State for Employees
   const [isNotificationOpen, setIsNotificationOpen] = useState<boolean>(false);
+  const [activeTaskTab, setActiveTaskTab] = useState<"notifications" | "todo">("notifications");
 
   // Table vs Card View toggle states
   const [managerTableViewMode, setManagerTableViewMode] = useState<"table" | "card">("table");
@@ -211,9 +256,23 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
     return new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" }).format(val);
   };
 
-  // 1. Employee calculations
-  const nonDraftAdvances = advances.filter((a) => a.status !== AdvanceStatus.DRAFT);
-  const draftAdvances = advances.filter((a) => a.status === AdvanceStatus.DRAFT);
+  const isAccountant = currentEmployee.role === UserRole.ACCOUNTANT;
+  const isAdmin = currentEmployee.role === UserRole.ADMIN;
+  const isCeo = currentEmployee.position === "กรรมการผู้จัดการ" || 
+                 currentEmployee.position === "ผู้บริหาร" || 
+                 currentEmployee.position?.toLowerCase() === "ceo" ||
+                 currentEmployee.position?.toLowerCase() === "executive";
+
+  const isFullAccess = isAccountant || isAdmin || isCeo;
+
+  const kpiAdvances = isFullAccess
+    ? advances
+    : advances.filter((a) => a.employeeId === currentEmployee.id);
+
+  // 1. Employee calculations (Strictly personal)
+  const empPersonalAdvances = advances.filter((a) => a.employeeId === currentEmployee.id);
+  const nonDraftAdvances = empPersonalAdvances.filter((a) => a.status !== AdvanceStatus.DRAFT);
+  const draftAdvances = empPersonalAdvances.filter((a) => a.status === AdvanceStatus.DRAFT);
 
   const empOutstandingBalance = nonDraftAdvances
     .filter((a) => [AdvanceStatus.WAITING_CLEARANCE, AdvanceStatus.PARTIALLY_CLEARED, AdvanceStatus.RETURNED].includes(a.status))
@@ -225,13 +284,27 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
     .filter((a) => [AdvanceStatus.WAITING_CLEARANCE, AdvanceStatus.PARTIALLY_CLEARED, AdvanceStatus.PENDING_AUDIT, AdvanceStatus.RETURNED].includes(a.status))
     .reduce((sum, a) => sum + a.outstandingAmount, 0);
 
+  const empTotalAdvanceAmount = nonDraftAdvances
+    .filter((a) => a.status !== AdvanceStatus.REJECTED)
+    .reduce((sum, a) => sum + (a.approvedAmount || a.requestAmount), 0);
+
   const empClosedAmount = nonDraftAdvances
     .filter((a) => a.status === AdvanceStatus.CLOSED)
-    .reduce((sum, a) => sum + a.requestAmount, 0);
+    .reduce((sum, a) => sum + (a.approvedAmount || a.requestAmount), 0);
+
+  const nowTime = new Date().getTime();
+  const empOverdueAmount = nonDraftAdvances
+    .filter((a) => {
+      if (![AdvanceStatus.WAITING_CLEARANCE, AdvanceStatus.PARTIALLY_CLEARED, AdvanceStatus.RETURNED].includes(a.status)) return false;
+      if (!a.neededDate) return false;
+      const diffDays = Math.ceil((new Date(a.neededDate).getTime() - nowTime) / (1000 * 60 * 60 * 24));
+      return diffDays < 0;
+    })
+    .reduce((sum, a) => sum + a.outstandingAmount, 0);
 
   // 2. Manager calculations
-  const managerPendingCount = advances.filter((a) => a.status === AdvanceStatus.PENDING_APPROVAL).length;
-  const managerPendingAmount = advances
+  const managerPendingCount = kpiAdvances.filter((a) => a.status === AdvanceStatus.PENDING_APPROVAL).length;
+  const managerPendingAmount = kpiAdvances
     .filter((a) => a.status === AdvanceStatus.PENDING_APPROVAL)
     .reduce((sum, a) => sum + a.requestAmount, 0);
   const managerTotalEmployees = employees.length || 1;
@@ -239,19 +312,28 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
   // Recent created requests in last 7 days
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-  const managerRecentCount = advances.filter((a) => new Date(a.createdAt) >= sevenDaysAgo).length;
+  const managerRecentCount = kpiAdvances.filter((a) => new Date(a.createdAt) >= sevenDaysAgo).length;
 
   // 3. Accountant calculations
-  const acctPendingClearValue = advances
+  const acctPendingClearValue = kpiAdvances
     .filter((a) => [AdvanceStatus.WAITING_CLEARANCE, AdvanceStatus.PARTIALLY_CLEARED, AdvanceStatus.PENDING_AUDIT, AdvanceStatus.RETURNED].includes(a.status))
     .reduce((sum, a) => sum + a.outstandingAmount, 0);
 
-  const acctClosedValue = advances
+  const acctOverdueAmount = kpiAdvances
+    .filter((a) => {
+      if (![AdvanceStatus.WAITING_CLEARANCE, AdvanceStatus.PARTIALLY_CLEARED, AdvanceStatus.RETURNED].includes(a.status)) return false;
+      if (!a.neededDate) return false;
+      const diffDays = Math.ceil((new Date(a.neededDate).getTime() - nowTime) / (1000 * 60 * 60 * 24));
+      return diffDays < 0;
+    })
+    .reduce((sum, a) => sum + a.outstandingAmount, 0);
+
+  const acctClosedValue = kpiAdvances
     .filter((a) => a.status === AdvanceStatus.CLOSED)
     .reduce((sum, a) => sum + a.requestAmount, 0);
 
-  const acctTotalItems = advances.length;
-  const acctTotalValue = advances.reduce((sum, a) => sum + a.requestAmount, 0);
+  const acctTotalItems = kpiAdvances.length;
+  const acctTotalValue = kpiAdvances.reduce((sum, a) => sum + a.requestAmount, 0);
 
   // Unique project options list for filter dropdown
   const uniqueProjects = Array.from(new Set(advances.map((adv) => adv.projectId).filter(Boolean)));
@@ -270,8 +352,25 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
     return matchesSearch && matchesStatus && matchesProject;
   });
 
+  const [confirmDialogApprove, setConfirmDialogApprove] = useState<{ isOpen: boolean; adv: Advance | null }>({ isOpen: false, adv: null });
+
   // Action: Approve Advance Request
   const handleApprove = async (adv: Advance) => {
+    // Run the Permission Engine validation
+    const rules = globalSettings?.approvalWorkflow?.rules || [];
+    const permResult = checkApprovalPermission(currentEmployee, adv, rules);
+    if (!permResult.allowed) {
+      setErrorMessage(permResult.reason || "คุณไม่มีสิทธิ์อนุมัติยอดเงินนี้ตามเงื่อนไขในระบบ Matrix");
+      return;
+    }
+    setConfirmDialogApprove({ isOpen: true, adv });
+  };
+
+  const executeApprove = async () => {
+    const adv = confirmDialogApprove.adv;
+    if (!adv) return;
+    setConfirmDialogApprove({ isOpen: false, adv: null });
+    
     setActionLoading(true);
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -388,7 +487,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
   };
 
   // Calculate urgent clearing items (nearing clearing deadline, sorted by neededDate ascending)
-  const urgentClearingAdvances = advances
+  const urgentClearingAdvances = kpiAdvances
     .filter((a) => 
       [AdvanceStatus.WAITING_CLEARANCE, AdvanceStatus.PARTIALLY_CLEARED, AdvanceStatus.RETURNED].includes(a.status) && 
       a.outstandingAmount > 0
@@ -398,7 +497,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
 
   // Calculate top 3 employees with highest total outstanding balances
   const empOutstandingMap: { [name: string]: { id: string; name: string; outstanding: number; count: number } } = {};
-  advances.forEach((a) => {
+  kpiAdvances.forEach((a) => {
     if (a.outstandingAmount > 0) {
       const key = a.employeeName || "ไม่ระบุชื่อ";
       if (!empOutstandingMap[key]) {
@@ -431,7 +530,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
     let weekCount = 0, weekAmount = 0, prevWeekAmount = 0;
     let monthCount = 0, monthAmount = 0, prevMonthAmount = 0;
 
-    const userAdvances = advances.filter(adv => adv.employeeId === currentEmployee.id);
+    const userAdvances = kpiAdvances;
     userAdvances.forEach(adv => {
       const advDate = new Date(adv.createdAt);
       const amt = adv.requestAmount || 0;
@@ -467,6 +566,17 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
     };
   };
   const heroStats = getStats();
+
+  let kpiPreset = "employee";
+  if (currentEmployee.position) {
+    const roleConfig = globalSettings?.rolePermissions?.roles?.find((r: any) => r.id === currentEmployee.position);
+    if (roleConfig?.dashboard?.kpiPreset) {
+      kpiPreset = roleConfig.dashboard.kpiPreset;
+    }
+  } else {
+    if (currentEmployee.role === UserRole.ACCOUNTANT) kpiPreset = "accounting";
+    else if (currentEmployee.role === UserRole.ADMIN || currentEmployee.role === UserRole.MANAGER) kpiPreset = "executive";
+  }
 
   return (
     <div className="space-y-6 animate-fade-in" id="dashboard_tab">
@@ -780,12 +890,32 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                       className="inline-block px-2 py-0.5 text-[#856000] font-semibold uppercase rounded-full shadow-sm"
                       style={{ fontSize: '11px', background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)' }}
                     >
-                      {currentEmployee.role}
+                      {(() => {
+                        if (currentEmployee.position) {
+                          switch (currentEmployee.position.toLowerCase()) {
+                            case "admin": return "ผู้ดูแลระบบ (Admin)";
+                            case "executive": return "ผู้บริหาร (Executive)";
+                            case "ceo": return "ประธานเจ้าหน้าที่บริหาร (CEO)";
+                            case "pm": return "ผู้จัดการโครงการ (PM)";
+                            case "accounting": return "ฝ่ายบัญชี (Accounting)";
+                            case "foreman": return "โฟร์แมน (Foreman)";
+                            case "employee": return "พนักงานทั่วไป (Employee)";
+                            default: return currentEmployee.position.toUpperCase();
+                          }
+                        }
+                        switch (currentEmployee.role) {
+                          case UserRole.ADMIN: return "ผู้ดูแลระบบ (Admin)";
+                          case UserRole.ACCOUNTANT: return "ฝ่ายบัญชี (Accounting)";
+                          case UserRole.MANAGER: return "ผู้จัดการ (Manager)";
+                          case UserRole.EMPLOYEE: return "พนักงานทั่วไป (Employee)";
+                          default: return currentEmployee.role;
+                        }
+                      })()}
                     </span>
                   </div>
                   <p className="font-normal" style={{ fontSize: '12px', color: 'rgba(255,255,255,0.9)', lineHeight: '1.3' }}>
                     {currentEmployee.name}<br/>
-                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)' }}>have a good day :)</span>
+                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)' }}>{currentEmployee.department || "แผนกทั่วไป"}</span>
                   </p>
                   <p className="text-emerald-400 font-medium flex items-center gap-1.5" style={{ fontSize: '12px', marginTop: '2px' }}>
                     <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]"></span>
@@ -922,125 +1052,278 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
       )}
 
       {/* ==================================================================== */}
-      {/* 1. EMPLOYEE DASHBOARD VIEW */}
+      {/* UNIFIED DASHBOARD LAYOUT */}
       {/* ==================================================================== */}
-      {currentEmployee.role === UserRole.EMPLOYEE && (
-        <div className="space-y-6">
-          {/* Top Menu Cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-            <button
-              onClick={() => onNavigate("request")}
-              className="bg-white border border-stone-200 hover:border-stone-400 hover:shadow-md rounded-2xl p-4 transition text-left flex flex-col gap-2 w-full group"
-            >
-              <div className="w-10 h-10 bg-stone-900 group-hover:bg-stone-800 text-stone-50 rounded-xl flex items-center justify-center shrink-0">
-                <Send className="w-5 h-5" />
-              </div>
-              <div>
-                <h4 className="font-bold text-stone-950 text-xs">ขอเบิก</h4>
-                <p className="text-[10px] text-stone-400 mt-0.5">เบิกเงินทดรองจ่าย</p>
-              </div>
-            </button>
+      <div className="space-y-6">
+        {/* Top Menu Cards (All Roles) */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-5">
+          <button onClick={() => onNavigate("request")} className="bg-white/40 backdrop-blur-lg border border-white/40 hover:bg-white/60 hover:shadow-2xl rounded-[32px] p-5 md:p-6 transition-all duration-300 text-left flex flex-col gap-3 w-full group shadow-lg shadow-stone-200/40">
+            <div className="w-12 h-12 bg-stone-900 group-hover:scale-110 transition-transform text-stone-50 rounded-2xl flex items-center justify-center shrink-0 shadow-lg shadow-stone-900/20">
+              <Send className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="font-bold text-stone-950 text-sm">ขอเบิก</h4>
+              <p className="text-[11px] text-stone-500 mt-1 font-medium">เบิกเงินทดรองจ่าย</p>
+            </div>
+          </button>
+          <button onClick={() => onNavigate("clearance")} className="bg-white/40 backdrop-blur-lg border border-white/40 hover:bg-white/60 hover:shadow-2xl rounded-[32px] p-5 md:p-6 transition-all duration-300 text-left flex flex-col gap-3 w-full group shadow-lg shadow-indigo-100/40">
+            <div className="w-12 h-12 bg-indigo-600 group-hover:scale-110 transition-transform text-indigo-50 rounded-2xl flex items-center justify-center shrink-0 shadow-lg shadow-indigo-600/20">
+              <Receipt className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="font-bold text-indigo-950 text-sm">เคลียร์ยอด</h4>
+              <p className="text-[11px] text-stone-500 mt-1 font-medium">แนบใบเสร็จหักล้างยอด</p>
+            </div>
+          </button>
+          <button onClick={() => setIsNotificationOpen(true)} className="bg-white/40 backdrop-blur-lg border border-white/40 hover:bg-white/60 hover:shadow-2xl rounded-[32px] p-5 md:p-6 transition-all duration-300 text-left flex flex-col gap-3 w-full group shadow-lg shadow-amber-100/40">
+            <div className="w-12 h-12 bg-amber-500 group-hover:scale-110 transition-transform text-white rounded-2xl flex items-center justify-center shrink-0 shadow-lg shadow-amber-500/20">
+              <History className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="font-bold text-stone-950 text-sm">แจ้งเตือน</h4>
+              <p className="text-[11px] text-stone-500 mt-1 font-medium">ประวัติสถานะเอกสาร</p>
+            </div>
+          </button>
+          <button onClick={() => onNavigate("audit")} className="bg-white/40 backdrop-blur-lg border border-white/40 hover:bg-white/60 hover:shadow-2xl rounded-[32px] p-5 md:p-6 transition-all duration-300 text-left flex flex-col gap-3 w-full group shadow-lg shadow-stone-100/40">
+            <div className="w-12 h-12 bg-stone-100 group-hover:scale-110 transition-transform text-stone-700 rounded-2xl flex items-center justify-center shrink-0 shadow-lg border border-stone-200/50">
+              <FileText className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="font-bold text-stone-950 text-sm">ประวัติ</h4>
+              <p className="text-[11px] text-stone-500 mt-1 font-medium">รายการธุรกรรมทั้งหมด</p>
+            </div>
+          </button>
+        </div>
 
-            <button
-              onClick={() => onNavigate("clearance")}
-              className="bg-white border border-stone-200 hover:border-indigo-300 hover:shadow-md rounded-2xl p-4 transition text-left flex flex-col gap-2 w-full group"
-            >
-              <div className="w-10 h-10 bg-indigo-600 group-hover:bg-indigo-700 text-indigo-50 rounded-xl flex items-center justify-center shrink-0">
-                <Receipt className="w-5 h-5" />
+        {/* KPI Preset Section */}
+        {(() => {
+          if (kpiPreset === "employee") {
+            return (
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-5">
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-stone-200/30 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">ยอดค้างเคลียร์</p>
+                  <p className="text-xl font-black text-stone-900 font-mono mt-1.5">{formatCurrency(empOutstandingBalance)}</p>
+                  <div className="absolute top-4 right-4 w-1.5 h-1.5 bg-stone-300 rounded-full"></div>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-stone-200/30 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">ยอดเบิกสะสม</p>
+                  <p className="text-xl font-black text-indigo-600 font-mono mt-1.5">{formatCurrency(empTotalAdvanceAmount)}</p>
+                  <div className="absolute top-4 right-4 w-1.5 h-1.5 bg-indigo-300 rounded-full"></div>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-stone-200/30 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">ยอดเคลียร์แล้ว</p>
+                  <p className="text-xl font-black text-emerald-600 font-mono mt-1.5">{formatCurrency(empClosedAmount)}</p>
+                  <div className="absolute top-4 right-4 w-1.5 h-1.5 bg-emerald-300 rounded-full"></div>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-stone-200/30 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">รอส่งเอกสารตัวจริง</p>
+                  <p className="text-xl font-black text-amber-600 font-mono mt-1.5">{kpiAdvances.filter(a => a.status === "WAITING_CLEARANCE" && a.employeeId === currentEmployee.id).length} คำขอ</p>
+                  <div className="absolute top-4 right-4 w-1.5 h-1.5 bg-amber-300 rounded-full"></div>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-stone-200/30 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">ยอดเกินกำหนด</p>
+                  <p className="text-xl font-black text-red-600 font-mono mt-1.5">{formatCurrency(empOverdueAmount)}</p>
+                  <div className="absolute top-4 right-4 w-1.5 h-1.5 bg-red-300 rounded-full"></div>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-stone-200/30 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">จำนวนใบเบิกคงค้าง</p>
+                  <p className="text-xl font-black text-stone-900 font-mono mt-1.5">{nonDraftAdvances.filter(a => a.status !== "CLOSED" && a.status !== "REJECTED").length} ใบ</p>
+                  <div className="absolute top-4 right-4 w-1.5 h-1.5 bg-stone-300 rounded-full"></div>
+                </div>
               </div>
-              <div>
-                <h4 className="font-bold text-indigo-950 text-xs">เคลียร์ยอด</h4>
-                <p className="text-[10px] text-stone-400 mt-0.5">แนบใบเสร็จหักล้างยอด</p>
-              </div>
-            </button>
+            );
+          }
 
-            <button
-              onClick={() => setIsNotificationOpen(true)}
-              className="bg-white border border-stone-200 hover:border-amber-400 hover:shadow-md rounded-2xl p-4 transition text-left flex flex-col gap-2 w-full group"
-            >
-              <div className="w-10 h-10 bg-amber-500 group-hover:bg-amber-600 text-white rounded-xl flex items-center justify-center shrink-0">
-                <History className="w-5 h-5" />
+          if (kpiPreset === "accounting") {
+            return (
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-5">
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-blue-100/20 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">รอโอนเงิน</p>
+                  <p className="text-xl font-black text-blue-600 font-mono mt-1.5">{kpiAdvances.filter(a => a.status === "WAITING_TRANSFER").length} รายการ</p>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-amber-100/20 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">รอตรวจบิล</p>
+                  <p className="text-xl font-black text-yellow-600 font-mono mt-1.5">{kpiAdvances.filter(a => a.status === "PENDING_AUDIT").length} รายการ</p>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-indigo-100/20 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">ติดตามเอกสาร (รอเคลียร์)</p>
+                  <p className="text-xl font-black text-indigo-600 font-mono mt-1.5">{kpiAdvances.filter(a => a.status === "WAITING_CLEARANCE").length} รายการ</p>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-stone-100/20 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">จำนวนใบเบิกคงค้าง</p>
+                  <p className="text-xl font-black text-stone-900 font-mono mt-1.5">{acctTotalItems} ใบ</p>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-red-100/20 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">ยอดเงินเกินกำหนดเคลียร์</p>
+                  <p className="text-xl font-black text-red-600 font-mono mt-1.5">{formatCurrency(acctOverdueAmount)}</p>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-stone-100/20 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">รอโอนคืนบริษัท (ตีกลับ)</p>
+                  <p className="text-xl font-black text-stone-900 font-mono mt-1.5">{formatCurrency(kpiAdvances.filter(a => a.status === "RETURNED").reduce((sum, a) => sum + a.outstandingAmount, 0))}</p>
+                </div>
               </div>
-              <div>
-                <h4 className="font-bold text-stone-950 text-xs">แจ้งเตือน</h4>
-                <p className="text-[10px] text-stone-400 mt-0.5">ประวัติสถานะเอกสาร</p>
-              </div>
-            </button>
+            );
+          }
 
-            <button
-              onClick={() => onNavigate("audit")}
-              className="bg-white border border-stone-200 hover:border-stone-400 hover:shadow-md rounded-2xl p-4 transition text-left flex flex-col gap-2 w-full group"
+          if (kpiPreset === "executive" || kpiPreset === "admin" || kpiPreset === "ceo") {
+            return (
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-5">
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-amber-100/20 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">รออนุมัติ</p>
+                  <p className="text-xl font-black text-amber-600 font-mono mt-1.5">{managerPendingCount} รายการ</p>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-blue-100/20 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">ยอดโอนวันนี้</p>
+                  <p className="text-xl font-black text-blue-600 font-mono mt-1.5">{formatCurrency(heroStats.today.amount)}</p>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-emerald-100/20 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">ยอดใช้จ่ายโครงการ (ปิดยอด)</p>
+                  <p className="text-xl font-black text-emerald-600 font-mono mt-1.5">{formatCurrency(acctClosedValue)}</p>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-indigo-100/20 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">ยอดค้างเคลียร์รวม</p>
+                  <p className="text-xl font-black text-indigo-600 font-mono mt-1.5">{formatCurrency(acctPendingClearValue)}</p>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-stone-100/20 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">ยอดค้างเบิกรวม</p>
+                  <p className="text-xl font-black text-stone-900 font-mono mt-1.5">{formatCurrency(managerPendingAmount)}</p>
+                </div>
+                <div className="bg-white/40 backdrop-blur-lg border border-white/40 rounded-[28px] p-5 shadow-lg shadow-red-100/20 relative group transition-all hover:bg-white/60">
+                  <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">พนักงานค้างเคลียร์</p>
+                  <div className="mt-1.5 space-y-1">
+                    {topEmployeesOutstanding.length > 0 ? topEmployeesOutstanding.map((e, idx) => (
+                      <div key={idx} className="flex justify-between items-center text-[10px]">
+                        <span className="truncate w-16 text-stone-800 font-medium">{e.name.split(" ")[0]}</span>
+                        <span className="font-mono text-red-600 font-bold">{formatCurrency(e.outstanding)}</span>
+                      </div>
+                    )) : <p className="text-xs text-stone-400">- ไม่มี -</p>}
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          return null;
+        })()}
+
+        {/* My Tasks (To-Do & Notifications) */}
+        <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
+          <div className="flex border-b border-stone-100">
+            <button 
+              onClick={() => setActiveTaskTab("notifications")}
+              className={`flex-1 text-center py-3 font-bold text-sm transition-colors ${activeTaskTab === "notifications" ? "bg-stone-50 border-r border-stone-100 text-stone-900" : "bg-white text-stone-400 hover:text-stone-600 border-r border-stone-100"}`}
             >
-              <div className="w-10 h-10 bg-stone-100 group-hover:bg-stone-200 text-stone-700 rounded-xl flex items-center justify-center shrink-0">
-                <FileText className="w-5 h-5" />
-              </div>
-              <div>
-                <h4 className="font-bold text-stone-950 text-xs">ประวัติ</h4>
-                <p className="text-[10px] text-stone-400 mt-0.5">รายการธุรกรรมทั้งหมด</p>
-              </div>
+              แจ้งเตือน (Notifications)
+              <span className={`ml-2 px-1.5 py-0.5 rounded-full text-[10px] ${activeTaskTab === "notifications" ? "bg-indigo-100 text-indigo-700" : "bg-stone-100 text-stone-400"}`}>
+                {employeeNotifications.length}
+              </span>
+            </button>
+            <button 
+              onClick={() => setActiveTaskTab("todo")}
+              className={`flex-1 text-center py-3 font-bold text-sm transition-colors ${activeTaskTab === "todo" ? "bg-stone-50 text-stone-900" : "bg-white text-stone-400 hover:text-stone-600"}`}
+            >
+              งานที่ต้องทำ (To-Do)
+              <span className={`ml-2 px-1.5 py-0.5 rounded-full text-[10px] ${activeTaskTab === "todo" ? "bg-amber-100 text-amber-700" : "bg-stone-100 text-stone-400"}`}>
+                {draftAdvances.length + draftClearingLogs.length + (currentEmployee.role !== UserRole.EMPLOYEE ? managerPendingCount : 0)}
+              </span>
             </button>
           </div>
+          <div className="p-4">
+            <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+              {activeTaskTab === "notifications" ? (
+                employeeNotifications.length === 0 ? (
+                  <div className="py-10 text-center text-stone-400 text-xs italic">ไม่มีการแจ้งเตือนใหม่</div>
+                ) : (
+                  employeeNotifications.slice(0, 8).map(log => (
+                    <button 
+                      key={log.id} 
+                      onClick={() => navigateToTransaction(log.advId)}
+                      className="w-full flex items-start gap-3 bg-stone-50 hover:bg-stone-100 p-3 rounded-xl border border-stone-100 transition-colors text-left group"
+                    >
+                      <div className="p-1.5 bg-indigo-100 text-indigo-600 rounded-lg shrink-0 group-hover:scale-110 transition-transform">
+                        <History className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold text-stone-800 line-clamp-2">{log.note}</p>
+                        <p className="text-[10px] text-stone-400 mt-0.5">{log.timestamp.split("T")[0]} • {log.advId}</p>
+                      </div>
+                    </button>
+                  ))
+                )
+              ) : (
+                <div className="space-y-2">
+                  {/* Drafts for all roles */}
+                  {draftAdvances.length === 0 && draftClearingLogs.length === 0 && (currentEmployee.role === UserRole.EMPLOYEE || managerPendingCount === 0) && (
+                    <div className="py-10 text-center text-stone-400 text-xs italic">ไม่มีงานค้างในขณะนี้</div>
+                  )}
+                  
+                  {/* Pending Approvals for Managers */}
+                  {(currentEmployee.role === UserRole.MANAGER || currentEmployee.role === UserRole.ADMIN) && advances.filter(a => a.status === AdvanceStatus.PENDING_APPROVAL).map(adv => (
+                    <button 
+                      key={adv.id}
+                      onClick={() => onNavigate("approval")}
+                      className="w-full flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition-colors text-left group"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="p-1.5 bg-amber-500 text-white rounded-lg shadow-sm">
+                          <Send className="w-3.5 h-3.5" />
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-amber-900">{adv.advId}</p>
+                          <p className="text-[10px] text-amber-700">รอคุณอนุมัติ • {formatCurrency(adv.requestAmount)}</p>
+                        </div>
+                      </div>
+                      <div className="text-[10px] font-bold text-amber-600 bg-white px-2 py-0.5 rounded-full border border-amber-200">อนุมัติ</div>
+                    </button>
+                  ))}
 
-          {/* Shortcuts Panel - Professional Cards */}
-          <div className="bg-stone-50 border border-stone-200/60 rounded-2xl p-5">
-            <p className="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest mb-3.5 px-1">เมนูลัดสำหรับพนักงาน (Shortcuts)</p>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
-              <button
-                onClick={() => onNavigate("request")}
-                className="bg-white border border-stone-200 hover:border-stone-400 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
-              >
-                <div className="w-10 h-10 bg-stone-900 group-hover:bg-stone-800 text-stone-50 rounded-xl flex items-center justify-center shrink-0">
-                  <Send className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-stone-950 text-xs">ขอเบิก</h4>
-                  <p className="text-[10px] text-stone-400 mt-0.5">เบิกเงินทดรองจ่าย</p>
-                </div>
-              </button>
+                  {/* Draft Advances */}
+                  {draftAdvances.map(adv => (
+                    <button 
+                      key={adv.id}
+                      onClick={() => onEditDraftAdvance && onEditDraftAdvance(adv)}
+                      className="w-full flex items-center justify-between p-3 bg-stone-50 border border-stone-200 rounded-xl hover:bg-stone-100 transition-colors text-left group"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="p-1.5 bg-stone-200 text-stone-600 rounded-lg">
+                          <FileText className="w-3.5 h-3.5" />
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-stone-800">{adv.advId || "Draft"}</p>
+                          <p className="text-[10px] text-stone-500">บันทึกร่างคำขอ • {formatCurrency(adv.requestAmount)}</p>
+                        </div>
+                      </div>
+                      <div className="text-[10px] font-bold text-stone-400">แก้ไข</div>
+                    </button>
+                  ))}
 
-              <button
-                onClick={() => onNavigate("clearance")}
-                className="bg-white border border-stone-200 hover:border-indigo-300 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
-              >
-                <div className="w-10 h-10 bg-indigo-600 group-hover:bg-indigo-700 text-indigo-50 rounded-xl flex items-center justify-center shrink-0">
-                  <Receipt className="w-5 h-5" />
+                  {/* Draft Clearing */}
+                  {draftClearingLogs.map(log => (
+                    <button 
+                      key={log.id}
+                      onClick={() => onEditDraftClearing ? onEditDraftClearing(log.id) : onNavigate("clearance")}
+                      className="w-full flex items-center justify-between p-3 bg-stone-50 border border-stone-200 rounded-xl hover:bg-stone-100 transition-colors text-left group"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="p-1.5 bg-stone-200 text-stone-600 rounded-lg">
+                          <Receipt className="w-3.5 h-3.5" />
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-stone-800">{log.advId}</p>
+                          <p className="text-[10px] text-stone-500">บันทึกร่างเคลียร์ยอด</p>
+                        </div>
+                      </div>
+                      <div className="text-[10px] font-bold text-stone-400">แก้ไข</div>
+                    </button>
+                  ))}
                 </div>
-                <div>
-                  <h4 className="font-bold text-indigo-950 text-xs">เคลียร์ยอด</h4>
-                  <p className="text-[10px] text-stone-400 mt-0.5">แนบใบเสร็จหักล้างยอด</p>
-                </div>
-              </button>
-
-              <button
-                onClick={() => setIsNotificationOpen(true)}
-                className="bg-white border border-stone-200 hover:border-amber-400 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
-              >
-                <div className="w-10 h-10 bg-amber-500 group-hover:bg-amber-600 text-white rounded-xl flex items-center justify-center shrink-0">
-                  <History className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-stone-950 text-xs">แจ้งเตือน</h4>
-                  <p className="text-[10px] text-stone-400 mt-0.5">ประวัติสถานะเอกสาร</p>
-                </div>
-              </button>
-
-              <button
-                onClick={() => onNavigate("audit")}
-                className="bg-white border border-stone-200 hover:border-stone-400 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
-              >
-                <div className="w-10 h-10 bg-stone-100 group-hover:bg-stone-200 text-stone-700 rounded-xl flex items-center justify-center shrink-0">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-stone-950 text-xs">ประวัติ</h4>
-                  <p className="text-[10px] text-stone-400 mt-0.5">รายการธุรกรรมทั้งหมด</p>
-                </div>
-              </button>
+              )}
             </div>
           </div>
+        </div>
+
 
           {/* Drafts Section for Employee */}
-          {currentEmployee.role === UserRole.EMPLOYEE && (draftAdvances.length > 0 || draftClearingLogs.length > 0) && (
+          {(kpiPreset === "employee") && (draftAdvances.length > 0 || draftClearingLogs.length > 0) && (
             <div className="bg-amber-50/50 border border-amber-200 rounded-2xl p-5 md:p-6 shadow-xs space-y-4 animate-fade-in" id="drafts_section">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -1056,7 +1339,6 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                   มีทั้งหมด {draftAdvances.length + draftClearingLogs.length} รายการร่าง
                 </span>
               </div>
-
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Draft Advances */}
                 {draftAdvances.map((adv) => (
@@ -1078,7 +1360,6 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                     </button>
                   </div>
                 ))}
-
                 {/* Draft Clearing Logs */}
                 {draftClearingLogs.map((log) => (
                   <div key={log.id} className="bg-white border border-amber-200 rounded-xl p-4 flex items-start justify-between gap-3 shadow-xs">
@@ -1102,14 +1383,15 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
             </div>
           )}
 
+
           {/* Recent list & guideline splits */}
+          {kpiPreset === "employee" && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
               <div className="px-6 py-5 border-b border-stone-100 flex items-center justify-between">
                 <h3 className="font-bold text-stone-900 text-sm">รายการเบิกเงินล่าสุดของคุณ</h3>
                 <span className="text-[10px] font-mono font-bold bg-stone-100 px-2 py-0.5 rounded text-stone-500 uppercase">ทั้งหมด {nonDraftAdvances.length} รายการ</span>
               </div>
-
               {loading ? (
                 <div className="py-20 text-center text-stone-500 text-xs">กำลังโหลดข้อมูล...</div>
               ) : nonDraftAdvances.length === 0 ? (
@@ -1147,7 +1429,6 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                 </div>
               )}
             </div>
-
             {/* Instruction Guidelines Card */}
             <div className="bg-stone-900 text-stone-100 rounded-2xl p-6 shadow-sm border border-stone-800 space-y-4">
               <h3 className="font-bold text-white text-sm">คำแนะนำขั้นตอนการทำงาน</h3>
@@ -1176,139 +1457,30 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
               </div>
             </div>
           </div>
-        </div>
-      )}
+          )}
 
-      {/* ==================================================================== */}
-      {/* 2. MANAGER / APPROVER DASHBOARD VIEW */}
-      {/* ==================================================================== */}
-      {currentEmployee.role === UserRole.MANAGER && (
-        <div className="space-y-6">
-          {/* Manager KPI Dashboard */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-            <div className="bg-white border border-stone-200 rounded-2xl p-4 md:p-6 shadow-sm flex items-start justify-between relative group">
-              <div className="space-y-1 relative z-10">
-                <p className="text-[10px] md:text-xs font-bold text-stone-400 uppercase tracking-wider">รายการรออนุมัติ</p>
-                <p className="text-base md:text-2xl font-black text-stone-900 font-mono tracking-tight">{managerPendingCount} รายการ</p>
-              </div>
-              <div className="p-2 md:p-3 bg-amber-50 text-amber-600 rounded-xl border border-amber-100 transition-transform group-hover:scale-110">
-                <Clock className="w-4 h-4 md:w-5 md:h-5" />
-              </div>
-            </div>
-
-            <div className="bg-white border border-stone-200 rounded-2xl p-4 md:p-6 shadow-sm flex items-start justify-between relative group">
-              <div className="space-y-1 relative z-10">
-                <p className="text-[10px] md:text-xs font-bold text-stone-400 uppercase tracking-wider">ยอดเงินรวมรออนุมัติ</p>
-                <p className="text-base md:text-2xl font-black text-indigo-600 font-mono tracking-tight">{formatCurrency(managerPendingAmount)}</p>
-              </div>
-              <div className="p-2 md:p-3 bg-indigo-50 text-indigo-600 rounded-xl border border-indigo-100 transition-transform group-hover:scale-110">
-                <DollarSign className="w-4 h-4 md:w-5 md:h-5" />
-              </div>
-            </div>
-
-            <div className="bg-white border border-stone-200 rounded-2xl p-4 md:p-6 shadow-sm flex items-start justify-between relative group">
-              <div className="space-y-1 relative z-10">
-                <p className="text-[10px] md:text-xs font-bold text-stone-400 uppercase tracking-wider">จำนวนพนักงานทั้งหมด</p>
-                <p className="text-base md:text-2xl font-black text-stone-900 font-mono tracking-tight">{managerTotalEmployees} คน</p>
-              </div>
-              <div className="p-2 md:p-3 bg-stone-50 text-stone-600 rounded-xl border border-stone-200 transition-transform group-hover:scale-110">
-                <User className="w-4 h-4 md:w-5 md:h-5" />
-              </div>
-            </div>
-
-            <div className="bg-white border border-stone-200 rounded-2xl p-4 md:p-6 shadow-sm flex items-start justify-between relative group">
-              <div className="space-y-1 relative z-10">
-                <p className="text-[10px] md:text-xs font-bold text-stone-400 uppercase tracking-wider">คำขอใหม่สัปดาห์นี้</p>
-                <p className="text-base md:text-2xl font-black text-emerald-600 font-mono tracking-tight">{managerRecentCount} คำขอ</p>
-              </div>
-              <div className="p-2 md:p-3 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100 transition-transform group-hover:scale-110">
-                <Calendar className="w-4 h-4 md:w-5 md:h-5" />
-              </div>
-            </div>
-          </div>
-
-          {/* Shortcuts Panel - Professional Cards */}
-          <div className="bg-stone-50 border border-stone-200/60 rounded-2xl p-5">
-            <p className="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest mb-3.5 px-1">เมนูลัดสำหรับพนักงาน (Shortcuts)</p>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
-              <button
-                onClick={() => onNavigate("request")}
-                className="bg-white border border-stone-200 hover:border-stone-400 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
-              >
-                <div className="w-10 h-10 bg-stone-900 group-hover:bg-stone-800 text-stone-50 rounded-xl flex items-center justify-center shrink-0">
-                  <Send className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-stone-950 text-xs">ขอเบิก</h4>
-                  <p className="text-[10px] text-stone-400 mt-0.5">เบิกเงินทดรองจ่าย</p>
-                </div>
-              </button>
-
-              <button
-                onClick={() => onNavigate("clearance")}
-                className="bg-white border border-stone-200 hover:border-indigo-300 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
-              >
-                <div className="w-10 h-10 bg-indigo-600 group-hover:bg-indigo-700 text-indigo-50 rounded-xl flex items-center justify-center shrink-0">
-                  <Receipt className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-indigo-950 text-xs">เคลียร์ยอด</h4>
-                  <p className="text-[10px] text-stone-400 mt-0.5">แนบใบเสร็จหักล้างยอด</p>
-                </div>
-              </button>
-
-              <button
-                onClick={() => setIsNotificationOpen(true)}
-                className="bg-white border border-stone-200 hover:border-amber-400 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
-              >
-                <div className="w-10 h-10 bg-amber-500 group-hover:bg-amber-600 text-white rounded-xl flex items-center justify-center shrink-0">
-                  <History className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-stone-950 text-xs">แจ้งเตือน</h4>
-                  <p className="text-[10px] text-stone-400 mt-0.5">ประวัติสถานะเอกสาร</p>
-                </div>
-              </button>
-
-              <button
-                onClick={() => onNavigate("audit")}
-                className="bg-white border border-stone-200 hover:border-stone-400 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
-              >
-                <div className="w-10 h-10 bg-stone-100 group-hover:bg-stone-200 text-stone-700 rounded-xl flex items-center justify-center shrink-0">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-stone-950 text-xs">ประวัติ</h4>
-                  <p className="text-[10px] text-stone-400 mt-0.5">รายการธุรกรรมทั้งหมด</p>
-                </div>
-              </button>
-            </div>
-          </div>
 
           {/* Recent list of requests with interactive Approve / Reject buttons */}
+          {(kpiPreset === "executive" || kpiPreset === "admin" || kpiPreset === "ceo") && (
           <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
             <div className="px-6 py-5 border-b border-stone-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="font-bold text-stone-900 text-sm">รายการรอการตรวจสอบและอนุมัติ</h3>
-                <p className="text-[11px] text-stone-400 mt-0.5">รวมทั้งสิ้น {advances.filter(a => a.status === AdvanceStatus.PENDING_APPROVAL).length} คำขอที่รอการตัดสินใจ</p>
+                <p className="text-[11px] text-stone-400 mt-0.5">รวมทั้งสิ้น {advances.filter(a => a.status === "PENDING_APPROVAL").length} คำขอที่รอการตัดสินใจ</p>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-[10px] font-mono font-bold bg-stone-100 px-2.5 py-1 rounded text-stone-600 uppercase">รวมทั้งหมด {advances.length}</span>
                 <div className="flex bg-stone-100 p-0.5 rounded-lg border border-stone-200">
                   <button
                     onClick={() => setManagerTableViewMode("table")}
-                    className={`px-2 py-1 text-[10px] font-bold rounded-md transition flex items-center gap-1 ${
-                      managerTableViewMode === "table" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"
-                    }`}
+                    className={`px-2 py-1 text-[10px] font-bold rounded-md transition flex items-center gap-1 ${managerTableViewMode === "table" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`}
                   >
                     <List className="w-3 h-3" />
                     <span>ตาราง</span>
                   </button>
                   <button
                     onClick={() => setManagerTableViewMode("card")}
-                    className={`px-2 py-1 text-[10px] font-bold rounded-md transition flex items-center gap-1 ${
-                      managerTableViewMode === "card" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"
-                    }`}
+                    className={`px-2 py-1 text-[10px] font-bold rounded-md transition flex items-center gap-1 ${managerTableViewMode === "card" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`}
                   >
                     <Grid className="w-3 h-3" />
                     <span>การ์ด</span>
@@ -1361,8 +1533,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                               <Eye className="w-3.5 h-3.5" />
                               <span>ดูรายละเอียด</span>
                             </button>
-
-                            {adv.status === AdvanceStatus.PENDING_APPROVAL && (
+                            {adv.status === "PENDING_APPROVAL" && (
                               <>
                                 <button
                                   onClick={() => handleApprove(adv)}
@@ -1372,7 +1543,6 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                                   <Check className="w-3.5 h-3.5" />
                                   <span>Approve</span>
                                 </button>
-
                                 <button
                                   onClick={() => handleOpenReject(adv)}
                                   className="px-2.5 py-1.5 bg-red-50 text-red-700 hover:bg-red-100 font-bold rounded-lg transition flex items-center gap-1"
@@ -1402,19 +1572,16 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                         </div>
                         {getStatusBadge(adv.status)}
                       </div>
-
                       <div className="pt-2 border-t border-stone-100 space-y-1">
                         <div className="text-xs font-bold text-stone-800 truncate">{adv.projectId}</div>
                         <div className="text-[11px] text-stone-500 line-clamp-2 leading-relaxed">{adv.details}</div>
                       </div>
                     </div>
-
                     <div className="pt-3 border-t border-stone-100 flex items-center justify-between">
                       <div>
                         <div className="text-[10px] font-bold text-stone-400 uppercase">จำนวนเงินเบิก</div>
                         <div className="font-mono font-black text-stone-900 text-sm mt-0.5">{formatCurrency(adv.requestAmount)}</div>
                       </div>
-
                       <div className="flex gap-1">
                         <button
                           onClick={() => handleOpenDetails(adv)}
@@ -1423,8 +1590,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                         >
                           <Eye className="w-3.5 h-3.5" />
                         </button>
-
-                        {adv.status === AdvanceStatus.PENDING_APPROVAL && (
+                        {adv.status === "PENDING_APPROVAL" && (
                           <>
                             <button
                               onClick={() => handleApprove(adv)}
@@ -1433,7 +1599,6 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                             >
                               <Check className="w-3.5 h-3.5" />
                             </button>
-
                             <button
                               onClick={() => handleOpenReject(adv)}
                               className="p-1.5 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg transition"
@@ -1450,115 +1615,11 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
               </div>
             )}
           </div>
-        </div>
-      )}
+          )}
 
-      {/* ==================================================================== */}
-      {/* 3. ACCOUNTING DASHBOARD VIEW */}
-      {/* ==================================================================== */}
-      {(currentEmployee.role === UserRole.ACCOUNTANT || currentEmployee.role === UserRole.ADMIN) && (
-        <div className="space-y-6">
-          {/* KPI Boxes */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-            <div className="bg-white/20 backdrop-blur-md border border-white/30 shadow-lg rounded-2xl p-4 md:p-6 flex items-start justify-between relative group">
-              <div className="space-y-1 relative z-10">
-                <p className="text-[10px] md:text-xs font-bold text-stone-400 uppercase tracking-wider">ยอดค้างเคลียร์รวม</p>
-                <p className="text-base md:text-2xl font-black text-stone-900 font-mono tracking-tight">{formatCurrency(acctPendingClearValue)}</p>
-              </div>
-              <div className="p-2 md:p-3 bg-indigo-50 text-indigo-600 rounded-xl border border-indigo-100 transition-transform group-hover:scale-110">
-                <Wallet className="w-4 h-4 md:w-5 md:h-5" />
-              </div>
-            </div>
 
-            <div className="bg-white border border-stone-200 rounded-2xl p-4 md:p-6 shadow-sm flex items-start justify-between relative group">
-              <div className="space-y-1 relative z-10">
-                <p className="text-[10px] md:text-xs font-bold text-stone-400 uppercase tracking-wider">ยอดปิดบัญชีแล้ว</p>
-                <p className="text-base md:text-2xl font-black text-emerald-600 font-mono tracking-tight">{formatCurrency(acctClosedValue)}</p>
-              </div>
-              <div className="p-2 md:p-3 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100 transition-transform group-hover:scale-110">
-                <FileCheck2 className="w-4 h-4 md:w-5 md:h-5" />
-              </div>
-            </div>
-
-            <div className="bg-white border border-stone-200 rounded-2xl p-4 md:p-6 shadow-sm flex items-start justify-between relative group">
-              <div className="space-y-1 relative z-10">
-                <p className="text-[10px] md:text-xs font-bold text-stone-400 uppercase tracking-wider">จำนวนรายการทั้งหมด</p>
-                <p className="text-base md:text-2xl font-black text-stone-900 font-mono tracking-tight">{acctTotalItems} รายการ</p>
-              </div>
-              <div className="p-2 md:p-3 bg-stone-50 text-stone-600 rounded-xl border border-stone-200 transition-transform group-hover:scale-110">
-                <FileText className="w-4 h-4 md:w-5 md:h-5" />
-              </div>
-            </div>
-
-            <div className="bg-white border border-stone-200 rounded-2xl p-4 md:p-6 shadow-sm flex items-start justify-between relative group">
-              <div className="space-y-1 relative z-10">
-                <p className="text-[10px] md:text-xs font-bold text-stone-400 uppercase tracking-wider">มูลค่าคำขอเบิกสะสมรวม</p>
-                <p className="text-base md:text-2xl font-black text-indigo-600 font-mono tracking-tight">{formatCurrency(acctTotalValue)}</p>
-              </div>
-              <div className="p-2 md:p-3 bg-indigo-50 text-indigo-600 rounded-xl border border-indigo-100 transition-transform group-hover:scale-110">
-                <DollarSign className="w-4 h-4 md:w-5 md:h-5" />
-              </div>
-            </div>
-          </div>
-
-          {/* Shortcuts Panel - Professional Cards */}
-          <div className="bg-stone-50 border border-stone-200/60 rounded-2xl p-5">
-            <p className="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest mb-3.5 px-1">เมนูลัดสำหรับพนักงาน (Shortcuts)</p>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
-              <button
-                onClick={() => onNavigate("request")}
-                className="bg-white border border-stone-200 hover:border-stone-400 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
-              >
-                <div className="w-10 h-10 bg-stone-900 group-hover:bg-stone-800 text-stone-50 rounded-xl flex items-center justify-center shrink-0">
-                  <Send className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-stone-950 text-xs">ขอเบิก</h4>
-                  <p className="text-[10px] text-stone-400 mt-0.5">เบิกเงินทดรองจ่าย</p>
-                </div>
-              </button>
-
-              <button
-                onClick={() => onNavigate("clearance")}
-                className="bg-white border border-stone-200 hover:border-indigo-300 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
-              >
-                <div className="w-10 h-10 bg-indigo-600 group-hover:bg-indigo-700 text-indigo-50 rounded-xl flex items-center justify-center shrink-0">
-                  <Receipt className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-indigo-950 text-xs">เคลียร์ยอด</h4>
-                  <p className="text-[10px] text-stone-400 mt-0.5">แนบใบเสร็จหักล้างยอด</p>
-                </div>
-              </button>
-
-              <button
-                onClick={() => setIsNotificationOpen(true)}
-                className="bg-white border border-stone-200 hover:border-amber-400 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
-              >
-                <div className="w-10 h-10 bg-amber-500 group-hover:bg-amber-600 text-white rounded-xl flex items-center justify-center shrink-0">
-                  <History className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-stone-950 text-xs">แจ้งเตือน</h4>
-                  <p className="text-[10px] text-stone-400 mt-0.5">ประวัติสถานะเอกสาร</p>
-                </div>
-              </button>
-
-              <button
-                onClick={() => onNavigate("audit")}
-                className="bg-white border border-stone-200 hover:border-stone-400 hover:shadow-md rounded-2xl p-4 transition text-left flex items-center gap-3 w-full group"
-              >
-                <div className="w-10 h-10 bg-stone-100 group-hover:bg-stone-200 text-stone-700 rounded-xl flex items-center justify-center shrink-0">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-stone-950 text-xs">ประวัติ</h4>
-                  <p className="text-[10px] text-stone-400 mt-0.5">รายการธุรกรรมทั้งหมด</p>
-                </div>
-              </button>
-            </div>
-          </div>
-
+          {kpiPreset === "accounting" && (
+            <>
           {/* 🚨 Urgent Follow-up Box (กล่องข้อมูลติดตามเร่งด่วน) */}
           <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm text-stone-850 space-y-6">
             <div className="flex items-center gap-2.5 pb-4 border-b border-stone-200">
@@ -1572,7 +1633,6 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
             </div>
 
             <div className="space-y-4">
-              {/* Left Column: Nearing clearing deadlines */}
               <div className="space-y-3">
                 <h4 className="text-xs font-bold text-stone-500 uppercase tracking-wider flex items-center gap-1.5">
                   <Calendar className="w-4 h-4 text-stone-500" />
@@ -1586,20 +1646,16 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                 ) : (
                   <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
                     {urgentClearingAdvances.map((adv, idx) => {
-                      // Calculate days left
                       const diffTime = new Date(adv.neededDate).getTime() - new Date().getTime();
                       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
                       const isOverdue = diffDays < 0;
                       const isFirst = idx === 0;
 
                       return (
-                        <div
+                        <button
                           key={adv.id}
-                          className={`${
-                            isFirst
-                              ? "bg-[#696969] text-white border border-stone-200"
-                              : "bg-stone-50 border border-stone-200 text-stone-800 hover:bg-stone-100/60"
-                          } rounded-2xl p-3.5 transition duration-150 flex items-center justify-between gap-3`}
+                          onClick={() => navigateToTransaction(adv.advId)}
+                          className={`${isFirst ? "bg-[#696969] text-white border border-stone-200 shadow-lg shadow-stone-300" : "bg-white border border-stone-200 text-stone-800 hover:bg-stone-50 hover:shadow-md"} rounded-2xl p-4 transition-all duration-200 flex items-center justify-between gap-3 text-left w-full group cursor-pointer`}
                         >
                           <div className="space-y-1 min-w-0">
                             <div className="flex items-center gap-2">
@@ -1611,15 +1667,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                             </div>
                             <div className="flex items-center gap-1.5 pt-1">
                               <Clock className={`w-3.5 h-3.5 ${isFirst ? "text-white/80" : "text-stone-400"}`} />
-                              <span className={`text-[10px] font-bold ${
-                                isFirst
-                                  ? "text-white"
-                                  : isOverdue
-                                  ? "text-red-500"
-                                  : diffDays <= 7
-                                  ? "text-amber-600"
-                                  : "text-stone-500"
-                              }`}>
+                              <span className={`text-[10px] font-bold ${isFirst ? "text-white" : isOverdue ? "text-red-500" : diffDays <= 7 ? "text-amber-600" : "text-stone-500"}`}>
                                 {isOverdue 
                                   ? `เลยกำหนดมาแล้ว ${Math.abs(diffDays)} วัน` 
                                   : `เหลือเวลาอีก ${diffDays} วัน (${adv.neededDate})`}
@@ -1631,7 +1679,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                             <p className={`text-[10px] font-bold uppercase ${isFirst ? "text-white/80" : "text-stone-400"}`}>ยอดคงค้างเคลียร์</p>
                             <p className={`font-mono font-black text-xs sm:text-sm mt-0.5 ${isFirst ? "text-white" : "text-red-600"}`}>{formatCurrency(adv.outstandingAmount)}</p>
                           </div>
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
@@ -1664,18 +1712,14 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                   <div className="w-[1px] bg-stone-200 mx-0.5 my-1" />
                   <button
                     onClick={() => setAcctTableViewMode("table")}
-                    className={`px-2 py-1 text-[10px] font-bold rounded-md transition flex items-center gap-1 ${
-                      acctTableViewMode === "table" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"
-                    }`}
+                    className={`px-2 py-1 text-[10px] font-bold rounded-md transition flex items-center gap-1 ${acctTableViewMode === "table" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`}
                   >
                     <List className="w-3 h-3" />
                     <span>ตาราง</span>
                   </button>
                   <button
                     onClick={() => setAcctTableViewMode("card")}
-                    className={`px-2 py-1 text-[10px] font-bold rounded-md transition flex items-center gap-1 ${
-                      acctTableViewMode === "card" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"
-                    }`}
+                    className={`px-2 py-1 text-[10px] font-bold rounded-md transition flex items-center gap-1 ${acctTableViewMode === "card" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`}
                   >
                     <Grid className="w-3 h-3" />
                     <span>การ์ด</span>
@@ -1686,7 +1730,6 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
 
             {/* Filter and Search controls */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {/* Search input */}
               <div className="relative">
                 <Search className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
@@ -1697,8 +1740,6 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                   className="w-full pl-10 pr-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-1 focus:ring-stone-900 focus:bg-white transition"
                 />
               </div>
-
-              {/* Status filter dropdown */}
               <div className="relative">
                 <Filter className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <select
@@ -1707,18 +1748,16 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                   className="w-full pl-10 pr-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-1 focus:ring-stone-900 focus:bg-white transition appearance-none cursor-pointer"
                 >
                   <option value="ALL">ทุกสถานะขั้นตอน</option>
-                  <option value={AdvanceStatus.PENDING_APPROVAL}>รออนุมัติ (PENDING_APPROVAL)</option>
-                  <option value={AdvanceStatus.WAITING_TRANSFER}>รอโอนเงิน (WAITING_TRANSFER)</option>
-                  <option value={AdvanceStatus.WAITING_CLEARANCE}>รอเคลียร์ (WAITING_CLEARANCE)</option>
-                  <option value={AdvanceStatus.PENDING_AUDIT}>รอตรวจสอบบิล (PENDING_AUDIT)</option>
-                  <option value={AdvanceStatus.PARTIALLY_CLEARED}>เคลียร์บางส่วน (PARTIALLY_CLEARED)</option>
-                  <option value={AdvanceStatus.RETURNED}>ตีกลับเอกสาร (RETURNED)</option>
-                  <option value={AdvanceStatus.REJECTED}>ปฏิเสธการอนุมัติ (REJECTED)</option>
-                  <option value={AdvanceStatus.CLOSED}>ปิดยอดแล้ว (CLOSED)</option>
+                  <option value="PENDING_APPROVAL">รออนุมัติ (PENDING_APPROVAL)</option>
+                  <option value="WAITING_TRANSFER">รอโอนเงิน (WAITING_TRANSFER)</option>
+                  <option value="WAITING_CLEARANCE">รอเคลียร์ (WAITING_CLEARANCE)</option>
+                  <option value="PENDING_AUDIT">รอตรวจสอบบิล (PENDING_AUDIT)</option>
+                  <option value="PARTIALLY_CLEARED">เคลียร์บางส่วน (PARTIALLY_CLEARED)</option>
+                  <option value="RETURNED">ตีกลับเอกสาร (RETURNED)</option>
+                  <option value="REJECTED">ปฏิเสธการอนุมัติ (REJECTED)</option>
+                  <option value="CLOSED">ปิดยอดแล้ว (CLOSED)</option>
                 </select>
               </div>
-
-              {/* Project filter dropdown */}
               <div className="relative">
                 <Filter className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <select
@@ -1803,7 +1842,6 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                         </div>
                         {getStatusBadge(adv.status)}
                       </div>
-
                       <div className="border-t border-stone-100 pt-2 grid grid-cols-2 gap-2 text-[11px]">
                         <div>
                           <span className="text-stone-400 block font-bold uppercase text-[9px]">โครงการ</span>
@@ -1814,13 +1852,11 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                           <span className="text-stone-800 font-semibold truncate block">{adv.category || "-"}</span>
                         </div>
                       </div>
-
                       <div className="text-[10px] text-stone-400 flex items-center gap-1">
                         <Calendar className="w-3 h-3 text-stone-300" />
                         <span>วันที่เบิก: {adv.createdAt.split("T")[0]}</span>
                       </div>
                     </div>
-
                     <div className="pt-3 border-t border-stone-100 flex items-center justify-between">
                       <div className="space-y-0.5">
                         <div className="text-[9px] font-bold text-stone-400 uppercase">ยอดเบิก / คงค้าง</div>
@@ -1832,7 +1868,6 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                           </span>
                         </div>
                       </div>
-
                       <button
                         onClick={() => handleOpenDetails(adv)}
                         className="p-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl transition flex items-center gap-1.5 text-[11px] font-bold"
@@ -1847,8 +1882,11 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
               </div>
             )}
           </div>
-        </div>
-      )}
+          </>
+          )}
+
+
+      </div>
 
       {/* ==================================================================== */}
       {/* 4. MODALS & SLIDE-OVERS */}
@@ -1898,6 +1936,36 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                   <span>ยืนยันปฏิเสธคำขอ</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Approve Modal */}
+      {confirmDialogApprove.isOpen && confirmDialogApprove.adv && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-stone-950/40 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-stone-200 animate-scale-in space-y-4">
+            <h3 className="text-base font-bold text-stone-900">ยืนยันการอนุมัติรายการ</h3>
+            <p className="text-sm text-stone-600 leading-relaxed">
+              คุณแน่ใจหรือไม่ว่าต้องการอนุมัติใบขอเบิกเงิน <b>{confirmDialogApprove.adv.advId}</b> จำนวน <b>{confirmDialogApprove.adv.requestAmount.toLocaleString("th-TH")} บาท</b> ของคุณ <b>{confirmDialogApprove.adv.employeeName}</b>?
+            </p>
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDialogApprove({ isOpen: false, adv: null })}
+                className="flex-1 px-4 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-bold rounded-xl transition"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={executeApprove}
+                disabled={actionLoading}
+                className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5"
+              >
+                {actionLoading ? <Clock className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                <span>อนุมัติรายการ</span>
+              </button>
             </div>
           </div>
         </div>
@@ -2005,7 +2073,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                 </button>
 
                 {/* Manager actions if pending */}
-                {currentEmployee.role === UserRole.MANAGER && selectedAdv.status === AdvanceStatus.PENDING_APPROVAL && (
+                {(currentEmployee.position === "pm" || currentEmployee.position === "executive" || currentEmployee.position === "ceo" || (!currentEmployee.position && currentEmployee.role === UserRole.MANAGER)) && selectedAdv.status === AdvanceStatus.PENDING_APPROVAL && (
                   <>
                     <button
                       type="button"
@@ -2053,12 +2121,19 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                 </div>
               ) : (
                 employeeNotifications.map((log) => (
-                  <div key={log.id} className="bg-stone-50 border border-stone-200/60 hover:border-stone-300 rounded-xl p-4 space-y-2 transition">
+                  <button 
+                    key={log.id} 
+                    onClick={() => {
+                      setIsNotificationOpen(false);
+                      navigateToTransaction(log.advId);
+                    }}
+                    className="bg-stone-50 border border-stone-200/60 hover:border-indigo-300 hover:bg-indigo-50/30 hover:shadow-md rounded-xl p-4 space-y-2 transition-all duration-200 text-left w-full group cursor-pointer"
+                  >
                     <div className="flex justify-between items-center">
-                      <span className="font-mono font-bold text-stone-900 text-[11px] bg-white border border-stone-200 px-2 py-0.5 rounded">{log.advId}</span>
+                      <span className="font-mono font-bold text-stone-900 text-[11px] bg-white border border-stone-200 px-2 py-0.5 rounded group-hover:border-indigo-200 group-hover:text-indigo-600 transition-colors">{log.advId}</span>
                       <span className="text-[10px] text-stone-400 font-mono">{log.timestamp.split("T")[0]} {log.timestamp.split("T")[1]?.slice(0, 5)}</span>
                     </div>
-                    <p className="text-xs font-bold text-stone-800 leading-relaxed">{log.note}</p>
+                    <p className="text-xs font-bold text-stone-800 leading-relaxed group-hover:text-stone-950 transition-colors">{log.note}</p>
                     <div className="flex items-center justify-between text-[10px] text-stone-400">
                       <span>ดำเนินการโดย: {log.actionBy} ({log.role})</span>
                       <div className="flex items-center gap-1">
@@ -2066,7 +2141,7 @@ export default function Dashboard({ currentEmployee, onNavigate, onEditDraftAdva
                         <span className="font-bold text-stone-600">{log.beforeStatus}</span>
                       </div>
                     </div>
-                  </div>
+                  </button>
                 ))
               )}
             </div>

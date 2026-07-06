@@ -79,6 +79,7 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
         username: "admin",
         name: "วิชัย สมาร์ทแอดมิน (Admin)",
         role: UserRole.ADMIN,
+        position: "admin",
         pinHash: adminPinHash,
         plainPin: "999999",
         bankName: "ธนาคารกสิกรไทย (KBANK)",
@@ -89,14 +90,15 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
         status: "Active"
       };
 
-      // 2. Manager User (PIN: 111111)
-      const managerPinHash = await hashPIN("111111");
-      const managerEmp: Employee = {
-        id: "emp-manager",
-        username: "manager",
-        name: "สมศักดิ์ รักองค์กร (Manager)",
+      // 2. Executive User (PIN: 111111)
+      const executivePinHash = await hashPIN("111111");
+      const executiveEmp: Employee = {
+        id: "emp-executive",
+        username: "executive",
+        name: "สมศักดิ์ รักองค์กร (Executive)",
         role: UserRole.MANAGER,
-        pinHash: managerPinHash,
+        position: "executive",
+        pinHash: executivePinHash,
         plainPin: "111111",
         bankName: "ธนาคารไทยพาณิชย์ (SCB)",
         bankNo: "111-2-22333-4",
@@ -106,14 +108,32 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
         status: "Active"
       };
 
-      // 3. Accountant User (PIN: 222222)
-      const acctPinHash = await hashPIN("222222");
-      const acctEmp: Employee = {
-        id: "emp-accountant",
-        username: "accountant",
-        name: "เพ็ญศรี บัญชีละเอียด (Accountant)",
+      // Legacy support for manager username (PIN: 111111)
+      const managerEmp: Employee = {
+        id: "emp-manager",
+        username: "manager",
+        name: "สมศักดิ์ ผู้จัดการ (Manager)",
+        role: UserRole.MANAGER,
+        position: "executive",
+        pinHash: executivePinHash,
+        plainPin: "111111",
+        bankName: "ธนาคารไทยพาณิชย์ (SCB)",
+        bankNo: "111-2-22333-4",
+        bankAccountName: "สมศักดิ์ ผู้จัดการ",
+        isActive: true,
+        isApprovedByAdmin: true,
+        status: "Active"
+      };
+
+      // 3. Accounting User (PIN: 222222)
+      const accountingPinHash = await hashPIN("222222");
+      const accountingEmp: Employee = {
+        id: "emp-accounting",
+        username: "accounting",
+        name: "เพ็ญศรี บัญชีละเอียด (Accounting)",
         role: UserRole.ACCOUNTANT,
-        pinHash: acctPinHash,
+        position: "accounting",
+        pinHash: accountingPinHash,
         plainPin: "222222",
         bankName: "ธนาคารกรุงเทพ (BBL)",
         bankNo: "222-4-55667-8",
@@ -123,13 +143,31 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
         status: "Active"
       };
 
-      // 4. Standard Employee (PIN: 333333)
+      // Legacy support for accountant username (PIN: 222222)
+      const accountantEmp: Employee = {
+        id: "emp-accountant",
+        username: "accountant",
+        name: "เพ็ญศรี บัญชีละเอียด (Accountant)",
+        role: UserRole.ACCOUNTANT,
+        position: "accounting",
+        pinHash: accountingPinHash,
+        plainPin: "222222",
+        bankName: "ธนาคารกรุงเทพ (BBL)",
+        bankNo: "222-4-55667-8",
+        bankAccountName: "เพ็ญศรี บัญชีละเอียด",
+        isActive: true,
+        isApprovedByAdmin: true,
+        status: "Active"
+      };
+
+      // 4. Employee User (PIN: 333333)
       const staffPinHash = await hashPIN("333333");
       const staffEmp: Employee = {
         id: "emp-staff",
         username: "employee",
         name: "สมยศ ทำงานดี (Employee)",
         role: UserRole.EMPLOYEE,
+        position: "employee",
         pinHash: staffPinHash,
         plainPin: "333333",
         bankName: "ธนาคารกรุงไทย (KTB)",
@@ -140,11 +178,67 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
         status: "Active"
       };
 
+      // 5. Foreman User (PIN: 333333)
+      const foremanEmp: Employee = {
+        id: "emp-foreman",
+        username: "foreman",
+        name: "มานะ คุมงานเก่ง (Foreman)",
+        role: UserRole.EMPLOYEE,
+        position: "foreman",
+        pinHash: staffPinHash,
+        plainPin: "333333",
+        bankName: "ธนาคารกรุงศรีอยุธยา (BAY)",
+        bankNo: "444-1-55667-8",
+        bankAccountName: "มานะ คุมงานเก่ง",
+        isActive: true,
+        isApprovedByAdmin: true,
+        status: "Active"
+      };
+
+      // 6. PM User (PIN: 333333)
+      const pmEmp: Employee = {
+        id: "emp-pm",
+        username: "pm",
+        name: "ปกรณ์ จัดการเก่ง (PM)",
+        role: UserRole.EMPLOYEE,
+        position: "pm",
+        pinHash: staffPinHash,
+        plainPin: "333333",
+        bankName: "ธนาคารทหารไทยธนชาต (TTB)",
+        bankNo: "555-2-33445-6",
+        bankAccountName: "ปกรณ์ จัดการเก่ง",
+        isActive: true,
+        isApprovedByAdmin: true,
+        status: "Active"
+      };
+
+      // 7. CEO User (PIN: 111111)
+      const ceoEmp: Employee = {
+        id: "emp-ceo",
+        username: "ceo",
+        name: "ธนินท์ ผู้บริหารสูงสุด (CEO)",
+        role: UserRole.MANAGER,
+        position: "ceo",
+        pinHash: executivePinHash,
+        plainPin: "111111",
+        bankName: "ธนาคารกสิกรไทย (KBANK)",
+        bankNo: "777-8-99001-2",
+        bankAccountName: "ธนินท์ ผู้บริหารสูงสุด",
+        isActive: true,
+        isApprovedByAdmin: true,
+        status: "Active"
+      };
+
       // Seed in Firestore
       await setDoc(doc(db, "employees", adminEmp.id), adminEmp);
+      await setDoc(doc(db, "employees", executiveEmp.id), executiveEmp);
       await setDoc(doc(db, "employees", managerEmp.id), managerEmp);
-      await setDoc(doc(db, "employees", acctEmp.id), acctEmp);
+      await setDoc(doc(db, "employees", accountingEmp.id), accountingEmp);
+      await setDoc(doc(db, "employees", accountantEmp.id), accountantEmp);
       await setDoc(doc(db, "employees", staffEmp.id), staffEmp);
+      await setDoc(doc(db, "employees", foremanEmp.id), foremanEmp);
+      await setDoc(doc(db, "employees", pmEmp.id), pmEmp);
+      await setDoc(doc(db, "employees", ceoEmp.id), ceoEmp);
 
       // Seed running numbers & settings if not present
       const settingsRef = doc(db, "settings", "global");
@@ -159,6 +253,124 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
         runningNumbers: {
           yearMonth: "2606",
           lastSequence: 0
+        },
+        rolePermissions: {
+          admin: {
+            canRequest: true,
+            canClear: true,
+            canApprove: true,
+            canAudit: true,
+            canCloseAccount: true,
+            canViewDBD: true,
+            canViewProjectCosts: true,
+            canManageUsers: true,
+            canManageSettings: true
+          },
+          ceo: {
+            canRequest: false,
+            canClear: false,
+            canApprove: true,
+            canAudit: false,
+            canCloseAccount: false,
+            canViewDBD: true,
+            canViewProjectCosts: true,
+            canManageUsers: false,
+            canManageSettings: false
+          },
+          executive: {
+            canRequest: false,
+            canClear: false,
+            canApprove: true,
+            canAudit: false,
+            canCloseAccount: false,
+            canViewDBD: true,
+            canViewProjectCosts: true,
+            canManageUsers: false,
+            canManageSettings: false
+          },
+          accounting: {
+            canRequest: false,
+            canClear: false,
+            canApprove: false,
+            canAudit: true,
+            canCloseAccount: true,
+            canViewDBD: true,
+            canViewProjectCosts: true,
+            canManageUsers: false,
+            canManageSettings: false
+          },
+          pm: {
+            canRequest: true,
+            canClear: true,
+            canApprove: false,
+            canAudit: false,
+            canCloseAccount: false,
+            canViewDBD: false,
+            canViewProjectCosts: true,
+            canManageUsers: false,
+            canManageSettings: false
+          },
+          foreman: {
+            canRequest: true,
+            canClear: true,
+            canApprove: false,
+            canAudit: false,
+            canCloseAccount: false,
+            canViewDBD: false,
+            canViewProjectCosts: false,
+            canManageUsers: false,
+            canManageSettings: false
+          },
+          employee: {
+            canRequest: true,
+            canClear: true,
+            canApprove: false,
+            canAudit: false,
+            canCloseAccount: false,
+            canViewDBD: false,
+            canViewProjectCosts: false,
+            canManageUsers: false,
+            canManageSettings: false
+          }
+        },
+        approvalWorkflow: {
+          threshold: 5000,
+          autoApproveAccounting: true,
+          rules: [
+            {
+              id: "rule-under-5000",
+              name: "ยอดเงินต่ำกว่า 5,000 (PM อนุมัติ)",
+              minAmount: 0,
+              maxAmount: 5000,
+              approverPositionIds: ["pm", "executive", "ceo", "admin"],
+              approverRoles: [UserRole.MANAGER, UserRole.ADMIN],
+              isActive: true,
+              projectScope: "all_projects",
+              canApproveOwnRequest: false
+            },
+            {
+              id: "rule-5000-to-50000",
+              name: "ยอดเงิน 5,000 ถึง 50,000 (Executive/CEO อนุมัติ)",
+              minAmount: 5001,
+              maxAmount: 50000,
+              approverPositionIds: ["executive", "ceo", "admin"],
+              approverRoles: [UserRole.MANAGER, UserRole.ADMIN],
+              isActive: true,
+              projectScope: "all_projects",
+              canApproveOwnRequest: false
+            },
+            {
+              id: "rule-50000-up",
+              name: "ยอดเงินมากกว่า 50,000 (CEO อนุมัติ)",
+              minAmount: 50001,
+              maxAmount: 0,
+              approverPositionIds: ["ceo", "admin"],
+              approverRoles: [UserRole.MANAGER, UserRole.ADMIN],
+              isActive: true,
+              projectScope: "all_projects",
+              canApproveOwnRequest: false
+            }
+          ]
         }
       });
 
@@ -247,13 +459,23 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
       try {
         const pathname = window.location.pathname;
         const search = new URLSearchParams(window.location.search);
+        const hasSavedLiffParams = 
+          sessionStorage.getItem("liff_param_route") ||
+          sessionStorage.getItem("liff_param_action") ||
+          sessionStorage.getItem("liff_param_adv_id") ||
+          sessionStorage.getItem("liff_param_advId") ||
+          sessionStorage.getItem("liff_param_id") ||
+          sessionStorage.getItem("liff_param_docId") ||
+          sessionStorage.getItem("liff_param_documentId");
+
         const isLineRuntime =
           /Line/i.test(navigator.userAgent) ||
           pathname.startsWith("/liff") ||
           search.has("liff.state") ||
           search.has("liff.referrer") ||
           ["approve", "reject"].includes(search.get("action") || "") ||
-          search.has("adv_id");
+          search.has("adv_id") ||
+          Boolean(hasSavedLiffParams);
 
         if (!isLineRuntime) return;
 
@@ -381,19 +603,45 @@ export default function PinLogin({ onLoginSuccess }: PinLoginProps) {
       }
 
       // Successful login
-      if (liffProfile && !emp.lineUserId) {
+      if (liffProfile && liffProfile.userId && liffProfile.userId.startsWith("U") && !emp.lineUserId) {
         try {
+          const nowIso = new Date().toISOString();
           await setDoc(doc(db, "employees", emp.id), {
             lineUserId: liffProfile.userId,
-            lineDisplayName: liffProfile.displayName,
-            linePictureUrl: liffProfile.pictureUrl || ""
+            lineDisplayName: liffProfile.displayName || "",
+            linePictureUrl: liffProfile.pictureUrl || "",
+            lineLinked: true,
+            lineLinkedAt: nowIso
           }, { merge: true });
           emp.lineUserId = liffProfile.userId;
-          emp.lineDisplayName = liffProfile.displayName;
+          emp.lineDisplayName = liffProfile.displayName || "";
           emp.linePictureUrl = liffProfile.pictureUrl || "";
+          emp.lineLinked = true;
+          emp.lineLinkedAt = nowIso;
           console.log("Associated LINE Profile to Employee account successfully!");
         } catch (linkErr) {
           console.error("Failed to associate LINE profile:", linkErr);
+        }
+      }
+
+      // Apply LINE User ID Policy (Non-breaking copy if UID starts with 'U')
+      let lineUserIdUpdated = false;
+      const empUid = emp.uid || emp.id || "";
+      if (empUid && empUid.startsWith("U") && (!emp.lineUserId || !emp.lineUserId.startsWith("U"))) {
+        emp.lineUserId = empUid;
+        lineUserIdUpdated = true;
+      }
+
+      if (lineUserIdUpdated) {
+        try {
+          await setDoc(doc(db, "employees", emp.id), {
+            lineUserId: emp.lineUserId,
+            lineLinked: true,
+            lineLinkedAt: new Date().toISOString()
+          }, { merge: true });
+          console.log(`Auto-associated LINE User ID from UID: ${emp.lineUserId}`);
+        } catch (linkErr) {
+          console.error("Failed to update lineUserId automatically from UID:", linkErr);
         }
       }
 

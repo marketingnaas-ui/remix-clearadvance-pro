@@ -224,9 +224,9 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
 
   const handleSetActiveItem = (item: ClearingItem) => {
     setActiveItem(item);
-    setEditedVendorName(item.vendorName);
-    setEditedNetAmt(item.netAmount);
-    setApprovedAmountOverride(item.netAmount);
+    setEditedVendorName(item.vendorName || "");
+    setEditedNetAmt(item.netAmount || 0);
+    setApprovedAmountOverride(item.netAmount || 0);
   };
 
   // Helper to determine the overall Advance status based on all clearing items
@@ -285,7 +285,7 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
         id: vaultId,
         advId: adv.advId,
         fileType: "SETTLEMENT",
-        fileUrl: "https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?q=80&w=600",
+        fileUrl: "",
         fileName: `settlement-summary-${adv.advId}.txt`,
         uploadedBy: currentEmployee.name,
         uploadedAt: new Date().toISOString(),
@@ -727,7 +727,9 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
                 onClick={() => setSelectedAdv(adv)}
                 className={`flex items-center gap-2 p-2 rounded-xl border cursor-pointer ${selectedAdv?.id === adv.id ? "bg-stone-900 border-stone-900 text-white" : "bg-white border-stone-200"}`}
               >
-                <img src={adv.employeeImageUrl || "/placeholder.jpg"} className="w-6 h-6 rounded-full" />
+                <div className="w-6 h-6 rounded-full bg-stone-200 flex items-center justify-center text-[10px] font-bold text-stone-500 overflow-hidden shrink-0">
+                  {adv.employeeImageUrl ? <img src={adv.employeeImageUrl} className="w-full h-full object-cover" /> : adv.employeeName.charAt(0)}
+                </div>
                 <div className="text-[10px] whitespace-nowrap">
                   <div className="font-bold">{adv.employeeName}</div>
                   <div className={selectedAdv?.id === adv.id ? "text-stone-300" : "text-stone-500"}>{adv.advId}</div>
@@ -819,7 +821,19 @@ export default function AccountingReview({ currentEmployee }: AccountingReviewPr
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-4 text-xs">
                       <div><span className="text-stone-400 font-semibold block uppercase text-[10px] mb-1">ชื่อร้านค้า</span><input type="text" value={editedVendorName} onChange={(e) => setEditedVendorName(e.target.value)} className="w-full px-2.5 py-1.5 bg-stone-50 border border-stone-200 rounded-lg text-stone-900 font-semibold" /></div>
-                      <div><span className="text-stone-400 font-semibold block uppercase text-[10px] mb-1">ยอดเงินสุทธิ</span><input type="number" value={editedNetAmt || ""} onChange={(e) => { const val = parseFloat(e.target.value) || 0; setEditedNetAmt(val); setApprovedAmountOverride(val); }} className="w-full px-2.5 py-1.5 bg-stone-50 border border-stone-200 rounded-lg font-mono font-bold text-stone-900" /></div>
+                      <div>
+                        <span className="text-stone-400 font-semibold block uppercase text-[10px] mb-1">ยอดเงินสุทธิ</span>
+                        <input 
+                          type="number" 
+                          value={editedNetAmt} 
+                          onChange={(e) => { 
+                            const val = parseFloat(e.target.value) || 0; 
+                            setEditedNetAmt(val); 
+                            setApprovedAmountOverride(val); 
+                          }} 
+                          className="w-full px-2.5 py-1.5 bg-stone-50 border border-stone-200 rounded-lg font-mono font-bold text-stone-900" 
+                        />
+                      </div>
                     </div>
                     
                     {/* Add detailed view of employee submitted data */}

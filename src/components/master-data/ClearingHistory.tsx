@@ -33,6 +33,9 @@ export default function ClearingHistory() {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ClearingLog));
       setLogs(data);
       setLoading(false);
+    }, (err) => {
+      console.error("Error subscribing to clearing logs:", err);
+      setLoading(false);
     });
     return () => unsubscribe();
   }, []);

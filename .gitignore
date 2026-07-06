@@ -1,6 +1,5 @@
 node_modules/
 build/
-dist/
 coverage/
 .DS_Store
 *.log
@@ -20,3 +19,9 @@ profiles/
 
 # Firebase local state
 .firebase/
+
+# Local ZIP and diagnostic files
+*.zip
+*.txt
+zip_files.txt
+

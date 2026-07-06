@@ -8,6 +8,7 @@ import { collection, doc, getDocs, setDoc, query, where, updateDoc, onSnapshot }
 import { db } from "../lib/firebase";
 import { handleFirestoreError, OperationType } from "../lib/errorUtils";
 import { performAIOCR, OCRResult } from "../lib/gemini";
+import { uploadBase64 } from "../lib/storage";
 import { triggerAutoSyncSheetsIfEnabled, triggerAutoSyncVaultFoldersIfEnabled } from "../lib/workspaceSync";
 import { sendLineNotification } from "../lib/lineNotify";
 import { Advance, AdvanceStatus, ClearingLog, ClearingItem, ActionType, AuditLog, Employee, SystemSettings } from "../types";
@@ -398,6 +399,10 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
         });
         successCount++;
 
+        // Upload to real storage
+        const storagePath = `receipts/${selectedAdvId || 'unsorted'}/${Date.now()}_${file.name}`;
+        const realUrl = await uploadBase64(base64Data, storagePath, file.type);
+
         // Duplicate Check Logic
         let isDuplicate = false;
         let duplicateInfo = undefined;
@@ -415,7 +420,6 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
 
         // Determine if same merchant exists
         const existingBillIndex = newlyPreparedBills.findIndex((bill) => areMerchantsEqual(result, bill));
-        const mockUrl = "https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?q=80&w=600";
 
         if (existingBillIndex >= 0) {
           // Merge under same merchant bill
@@ -432,7 +436,7 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
             });
           }
 
-          const mergedImageUrl = existing.imageUrl ? `${existing.imageUrl},${mockUrl}` : mockUrl;
+          const mergedImageUrl = existing.imageUrl ? `${existing.imageUrl},${realUrl}` : realUrl;
 
           newlyPreparedBills[existingBillIndex] = {
             ...existing,
@@ -466,7 +470,7 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
             discount: result.discount || 0,
             otherExpenseName: "ค่าบริการเพิ่มเติม",
             otherExpenseAmount: result.otherExpenses || 0,
-            imageUrl: mockUrl,
+            imageUrl: realUrl,
             ocrConfidence: result.confidenceScore || 85,
             rawOcrJson: JSON.stringify(result, null, 2),
             projectMode: "SINGLE",
@@ -678,7 +682,7 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
           discount: bill.discount || 0,
           otherExpenses: bill.otherExpenseAmount || 0,
           netAmount: totals.calculatedNet,
-          imageUrl: bill.imageUrl || "https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?q=80&w=600",
+          imageUrl: bill.imageUrl,
           ocrConfidence: bill.ocrConfidence || 100,
           isDuplicate: false,
           accountantApproved: false,
@@ -799,7 +803,7 @@ export default function EmployeeClearance({ currentEmployee, onSuccess, editingD
           discount: bill.discount || 0,
           otherExpenses: bill.otherExpenseAmount || 0,
           netAmount: totals.calculatedNet,
-          imageUrl: bill.imageUrl || "https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?q=80&w=600",
+          imageUrl: bill.imageUrl,
           ocrConfidence: bill.ocrConfidence || 100,
           isDuplicate: false,
           accountantApproved: false,

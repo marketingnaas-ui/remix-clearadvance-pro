@@ -6,6 +6,7 @@
 import React, { useState } from "react";
 import ProfileImage from "./components/ProfileImage";
 import PinLogin from "./components/PinLogin";
+import LineAccountLinker from "./components/LineAccountLinker";
 import Dashboard from "./components/Dashboard";
 import AdvanceRequestForm from "./components/AdvanceRequestForm";
 import ManagerApproval from "./components/ManagerApproval";
@@ -25,9 +26,11 @@ import UploadSlipLiff from "./components/UploadSlipLiff";
 import LiffAction from "./components/LiffAction";
 import { Employee, UserRole } from "./types";
 import { db } from "./lib/firebase";
-import { doc, onSnapshot } from "firebase/firestore";
-import { LogOut, LayoutDashboard, Send, CheckSquare, Receipt, HardDrive, History, FileCheck2, User, ChevronRight, Settings, Plus, X as CloseIcon, BarChart3, TrendingUp, FileCheck, Lock, BookOpen } from "lucide-react";
+import { checkGeneralPermission } from "./lib/permissionEngine";
+import { doc, onSnapshot, collection, getDoc, getDocs, limit, query, where } from "firebase/firestore";
+import { LogOut, LayoutDashboard, Send, CheckSquare, Receipt, HardDrive, History, FileCheck2, User, ChevronRight, Settings, Plus, X as CloseIcon, BarChart3, TrendingUp, FileCheck, Lock, BookOpen, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { seedDefaultRolesAndRules } from "./lib/seedDefaultRoles";
 
 export default function App() {
   const [currentEmployee, setCurrentEmployee] = useState<Employee | null>(() => {
@@ -39,6 +42,19 @@ export default function App() {
   const [editingDraftClearingId, setEditingDraftClearingId] = useState<string | null>(null);
   const [isFabOpen, setIsFabOpen] = useState(false);
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+  const [globalSettings, setGlobalSettings] = useState<any>(null);
+
+  React.useEffect(() => {
+    seedDefaultRolesAndRules();
+    const unsubscribe = onSnapshot(doc(db, "settings", "global"), (snap) => {
+      if (snap.exists()) {
+        setGlobalSettings(snap.data());
+      }
+    }, (err) => {
+      console.warn("Could not read global settings:", err);
+    });
+    return () => unsubscribe();
+  }, []);
 
   React.useEffect(() => {
     if (currentEmployee) {
@@ -62,6 +78,14 @@ export default function App() {
     const unsubscribe = onSnapshot(doc(db, "employees", currentEmployee.id), (snap) => {
       if (!snap.exists()) return;
       const latestEmployee = { id: snap.id, ...snap.data() } as Employee;
+
+      // Migrate uid to lineUserId if missing and valid
+      if (!latestEmployee.lineUserId && latestEmployee.uid?.startsWith("U")) {
+        import("firebase/firestore").then(({ updateDoc }) => {
+          updateDoc(doc(db, "employees", latestEmployee.id), { lineUserId: latestEmployee.uid }).catch(console.error);
+        });
+      }
+
       setCurrentEmployee((prev) => {
         if (!prev || prev.id !== latestEmployee.id) return prev;
         return { ...prev, ...latestEmployee };
@@ -73,7 +97,102 @@ export default function App() {
     return () => unsubscribe();
   }, [currentEmployee?.id]);
 
-  // Get mobile navigation items based on role
+  
+  const [liffState, setLiffState] = React.useState<"loading" | "linked" | "not_linked" | "not_liff">("loading");
+  const [liffProfileContext, setLiffProfileContext] = React.useState<any>(null);
+
+  React.useEffect(() => {
+    const initLiffSystem = async () => {
+      try {
+        const pathname = window.location.pathname;
+        const search = new URLSearchParams(window.location.search);
+        const hasSavedLiffParams = 
+          sessionStorage.getItem("liff_param_route") ||
+          sessionStorage.getItem("liff_param_action") ||
+          sessionStorage.getItem("liff_param_adv_id") ||
+          sessionStorage.getItem("liff_param_advId") ||
+          sessionStorage.getItem("liff_param_id") ||
+          sessionStorage.getItem("liff_param_docId") ||
+          sessionStorage.getItem("liff_param_documentId");
+
+        const isLineRuntime =
+          /Line/i.test(navigator.userAgent) ||
+          pathname.startsWith("/liff") ||
+          search.has("liff.state") ||
+          search.has("liff.referrer") ||
+          search.has("adv_id") ||
+          search.has("advId") ||
+          search.has("action") ||
+          Boolean(hasSavedLiffParams);
+
+        if (!isLineRuntime) {
+          setLiffState("not_liff");
+          return;
+        }
+
+        const settingsSnap = await getDoc(doc(db, "settings", "global"));
+        if (!settingsSnap.exists()) {
+           setLiffState("not_liff");
+           return;
+        }
+        
+        const settingsData = settingsSnap.data();
+        const lId = settingsData?.lineMessagingConfig?.liffId || settingsData?.lineConfig?.liffId;
+
+        if (lId && lId !== "123456-abcde") {
+          const liff = (await import("@line/liff")).default;
+          if (!liff.id) {
+            await liff.init({ liffId: lId });
+          }
+          if (!liff.isLoggedIn()) {
+             const isInIframe = window.self !== window.top;
+             if (!isInIframe) {
+                liff.login();
+                return;
+             } else {
+                setLiffState("not_liff");
+                return;
+             }
+          }
+
+          const profile = await liff.getProfile();
+          setLiffProfileContext(profile);
+
+          if (profile?.userId) {
+            const empQuery = query(
+              collection(db, "employees"),
+              where("lineUserId", "==", profile.userId),
+              limit(1)
+            );
+            const empSnap = await getDocs(empQuery);
+            if (!empSnap.empty) {
+              const matchedEmp = { id: empSnap.docs[0].id, ...empSnap.docs[0].data() } as Employee;
+              if (matchedEmp.isActive !== false && matchedEmp.status !== "Suspended" && matchedEmp.status !== "Disabled") {
+                setCurrentEmployee(matchedEmp);
+                setLiffState("linked");
+              } else {
+                setLiffState("not_linked");
+              }
+            } else {
+              setLiffState("not_linked");
+            }
+          } else {
+             setLiffState("not_linked");
+          }
+        } else {
+           setLiffState("not_liff");
+        }
+      } catch (err) {
+        console.warn("Background LIFF session check failed:", err);
+        setLiffState("not_liff");
+      }
+    };
+    
+    initLiffSystem();
+  }, []);
+
+
+  // Get mobile navigation items based on role and permissions matrix
   const getMobileNavItems = () => {
     if (!currentEmployee) return [];
     
@@ -81,23 +200,22 @@ export default function App() {
       { id: "dashboard", label: "หน้าแรก", icon: LayoutDashboard },
     ];
 
-    if (currentEmployee.role === UserRole.EMPLOYEE) {
-      items.push({ id: "request", label: "ขอเบิก", icon: Send });
-      items.push({ id: "clearance", label: "เคลียร์ใบเสร็จ", icon: Receipt });
-      items.push({ id: "vault", label: "ตู้นิรภัย", icon: HardDrive });
-    } else if (currentEmployee.role === UserRole.MANAGER) {
-      items.push({ id: "approval", label: "อนุมัติ", icon: CheckSquare });
-      items.push({ id: "dbd", label: "DBD เบิกจ่าย", icon: BarChart3 });
-      items.push({ id: "project_costs", label: "ต้นทุนโครงการ", icon: TrendingUp });
-    } else if (currentEmployee.role === UserRole.ACCOUNTANT) {
+    const hasRequest = checkGeneralPermission(currentEmployee, "canRequest", globalSettings?.rolePermissions);
+    const hasClear = checkGeneralPermission(currentEmployee, "canClear", globalSettings?.rolePermissions);
+    const hasApprove = checkGeneralPermission(currentEmployee, "canApprove", globalSettings?.rolePermissions);
+    const hasAudit = checkGeneralPermission(currentEmployee, "canAudit", globalSettings?.rolePermissions);
+    const hasViewDBD = checkGeneralPermission(currentEmployee, "canViewDBD", globalSettings?.rolePermissions);
+    const hasViewProjectCosts = checkGeneralPermission(currentEmployee, "canViewProjectCosts", globalSettings?.rolePermissions);
+
+    if (hasRequest) items.push({ id: "request", label: "ขอเบิก", icon: Send });
+    if (hasClear) items.push({ id: "clearance", label: "เคลียร์ใบเสร็จ", icon: Receipt });
+    if (hasApprove) items.push({ id: "approval", label: "อนุมัติ", icon: CheckSquare });
+    if (hasAudit) {
       items.push({ id: "accounting", label: "ตรวจบัญชี", icon: FileCheck2 });
       items.push({ id: "doc_tracking", label: "ติดตามเอกสาร", icon: FileCheck });
-      items.push({ id: "dbd", label: "DBD เบิกจ่าย", icon: BarChart3 });
-    } else if (currentEmployee.role === UserRole.ADMIN) {
-      items.push({ id: "approval", label: "อนุมัติ", icon: CheckSquare });
-      items.push({ id: "accounting", label: "ตรวจบัญชี", icon: FileCheck2 });
-      items.push({ id: "dbd", label: "DBD เบิกจ่าย", icon: BarChart3 });
     }
+    if (hasViewDBD) items.push({ id: "dbd", label: "DBD เบิกจ่าย", icon: BarChart3 });
+    if (hasViewProjectCosts) items.push({ id: "project_costs", label: "ต้นทุนโครงการ", icon: TrendingUp });
 
     // Always append "More" button at the end
     items.push({ id: "more", label: "เพิ่มเติม", icon: Settings });
@@ -115,16 +233,192 @@ export default function App() {
     setActiveTab("dashboard");
   };
 
-  const searchParams = new URLSearchParams(window.location.search);
-  const isLiffActionRoute = window.location.pathname.includes("/liff/action") || ["approve", "reject"].includes(searchParams.get("action") || "");
-  const isUploadSlipRoute = window.location.pathname.includes("/liff/upload-slip");
+  // Helper to extract query parameters, decoding from liff.state if needed
+  const getQueryParam = (key: string): string => {
+    const sParams = new URLSearchParams(window.location.search);
+    let val = sParams.get(key);
+    if (val) {
+      sessionStorage.setItem(`liff_param_${key}`, val);
+      return val;
+    }
 
-  if (isLiffActionRoute) {
-    return <LiffAction />;
+    const liffState = sParams.get("liff.state");
+    if (liffState) {
+      try {
+        const decoded = decodeURIComponent(liffState);
+        const qIndex = decoded.indexOf("?");
+        const queryStr = qIndex !== -1 ? decoded.substring(qIndex) : decoded;
+        const innerParams = new URLSearchParams(queryStr);
+        val = innerParams.get(key);
+        if (val) {
+          sessionStorage.setItem(`liff_param_${key}`, val);
+          return val;
+        }
+      } catch (e) {
+        console.error("Error parsing liff.state query param in App:", e);
+      }
+    }
+
+    // Fallback to sessionStorage ONLY if we are running in the LINE user agent or /liff path
+    const isLineUserAgent = /Line/i.test(navigator.userAgent) || window.location.pathname.startsWith("/liff");
+    if (isLineUserAgent) {
+      const savedVal = sessionStorage.getItem(`liff_param_${key}`);
+      return savedVal || "";
+    }
+    return "";
+  };
+
+  const routeParam = getQueryParam("route") || "";
+  const actionParam = getQueryParam("action") || "";
+  const documentId = getQueryParam("adv_id") || getQueryParam("advId") || getQueryParam("id") || getQueryParam("docId") || getQueryParam("documentId") || getQueryParam("advanceId") || "";
+
+  // Dynamic deep-link routing resolution state
+  const [deepLinkResolved, setDeepLinkResolved] = useState<"loading" | "liff-action" | "upload-slip" | "daily-report" | "none">(() => {
+    if (documentId || routeParam || actionParam || window.location.pathname.includes("/liff/upload-slip")) {
+      return "loading";
+    }
+    return "none";
+  });
+  const [resolvedAction, setResolvedAction] = useState<string>("");
+
+  React.useEffect(() => {
+    if (!documentId && !routeParam && !actionParam && !window.location.pathname.includes("/liff/upload-slip")) {
+      setDeepLinkResolved("none");
+      return;
+    }
+
+    const resolveRoute = async () => {
+      try {
+        // Rule: pathname.includes("/liff/upload-slip") or route === "upload-slip"
+        if (window.location.pathname.includes("/liff/upload-slip") || routeParam === "upload-slip") {
+          setDeepLinkResolved("upload-slip");
+          return;
+        }
+
+        // Rule: route === "daily-report"
+        if (routeParam === "daily-report") {
+          setDeepLinkResolved("daily-report");
+          return;
+        }
+
+        // Rule: route === "upload-slip"
+        if (routeParam === "upload-slip") {
+          setDeepLinkResolved("upload-slip");
+          return;
+        }
+
+        // Rule: route === "action" หรือ action === "approve" หรือ action === "reject"
+        if (routeParam === "action" || actionParam === "approve" || actionParam === "reject") {
+          setResolvedAction(actionParam);
+          setDeepLinkResolved("liff-action");
+          return;
+        }
+
+        // Rule: route === "document" และมี documentId
+        if (routeParam === "document" && documentId) {
+          setResolvedAction(""); // Renders action/document selector in LiffAction
+          setDeepLinkResolved("liff-action");
+          return;
+        }
+
+        // Rule: ถ้ามี documentId แต่ไม่มี route ห้ามกลับ Dashboard
+        if (documentId && !routeParam) {
+          if (["transfer", "upload-slip"].includes(actionParam)) {
+            setDeepLinkResolved("upload-slip");
+            return;
+          }
+          setResolvedAction(actionParam || "");
+          setDeepLinkResolved("liff-action");
+          return;
+        }
+
+        // Default or unhandled case
+        setDeepLinkResolved("none");
+      } catch (err) {
+        console.error("Error resolving deep link route:", err);
+        setDeepLinkResolved("none");
+      }
+    };
+
+    resolveRoute();
+  }, [documentId, routeParam, actionParam]);
+
+
+  if (liffState === "loading") {
+    return (
+      <div className="min-h-screen bg-stone-50 flex items-center justify-center">
+        <div className="text-center space-y-3 animate-fade-in">
+          <Loader2 className="w-8 h-8 animate-spin text-stone-500 mx-auto" />
+          <p className="text-xs text-stone-500 font-bold">กำลังเข้าสู่ระบบผ่าน LINE...</p>
+        </div>
+      </div>
+    );
   }
 
-  if (isUploadSlipRoute) {
+  if (liffState === "not_linked") {
+    return (
+      <LineAccountLinker 
+        liffProfile={liffProfileContext} 
+        onLinked={(emp) => {
+          setCurrentEmployee(emp);
+          setLiffState("linked");
+        }} 
+      />
+    );
+  }
+
+  if (deepLinkResolved === "loading") {
+
+    return (
+      <div className="min-h-screen bg-stone-50 flex items-center justify-center">
+        <div className="text-center space-y-3 animate-fade-in">
+          <Loader2 className="w-8 h-8 animate-spin text-stone-500 mx-auto" />
+          <p className="text-xs text-stone-500 font-bold">กำลังนำทางไปยังรายการ {documentId || "..."}...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (deepLinkResolved === "liff-action") {
+    return (
+      <LiffAction 
+        resolvedAction={resolvedAction} 
+        liffProfile={liffProfileContext}
+        currentEmployee={currentEmployee}
+        globalSettings={globalSettings}
+      />
+    );
+  }
+
+  if (deepLinkResolved === "upload-slip") {
     return <UploadSlipLiff />;
+  }
+
+  if (deepLinkResolved === "daily-report") {
+    const reportDate = getQueryParam("date") || new Date().toISOString().split("T")[0];
+    return (
+      <div className="min-h-screen bg-stone-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-white border border-stone-200 rounded-2xl p-6 text-center shadow-md space-y-4">
+          <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto">
+            <BarChart3 className="w-6 h-6 animate-pulse" />
+          </div>
+          <h2 className="text-lg font-extrabold text-stone-900 font-sans">รายงานเบิกจ่ายรายวัน (Daily Report)</h2>
+          <div className="bg-stone-50 p-4 rounded-xl text-left border border-stone-200">
+            <p className="text-xs text-stone-500 font-bold uppercase">วันที่รายงาน</p>
+            <p className="font-mono text-stone-900 text-sm font-bold mt-1">{reportDate}</p>
+          </div>
+          <p className="text-xs text-stone-500 leading-relaxed">
+            ระบบจัดเตรียมเส้นทาง LIFF สำหรับรายงานประจำวันเรียบร้อยแล้ว ฟังก์ชันการดูรายงานแบบเต็มกำลังอยู่ระหว่างการพัฒนาในรอบถัดไป
+          </p>
+          <button 
+            onClick={() => window.history.back()} 
+            className="w-full bg-stone-950 text-white font-bold py-3 px-4 rounded-xl text-xs hover:bg-stone-900 transition"
+          >
+            ย้อนกลับ
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (!currentEmployee) {
@@ -260,8 +554,8 @@ export default function App() {
               <ChevronRight className="w-3.5 h-3.5 opacity-60" />
             </button>
 
-            {/* Tab 2: Create Request Form (EMPLOYEE) */}
-            {currentEmployee.role === UserRole.EMPLOYEE && (
+            {/* Tab 2: Create Request Form */}
+            {checkGeneralPermission(currentEmployee, "canRequest", globalSettings?.rolePermissions) && (
               <button
                 onClick={() => setActiveTab("request")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -278,8 +572,8 @@ export default function App() {
               </button>
             )}
 
-            {/* Tab 3: Approval for Managers (MANAGER) */}
-            {(currentEmployee.role === UserRole.MANAGER || currentEmployee.role === UserRole.ADMIN) && (
+            {/* Tab 3: Approval for Managers */}
+            {checkGeneralPermission(currentEmployee, "canApprove", globalSettings?.rolePermissions) && (
               <button
                 onClick={() => setActiveTab("approval")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -296,8 +590,8 @@ export default function App() {
               </button>
             )}
 
-            {/* Tab 4: Employee Clearance Bill (EMPLOYEE) */}
-            {currentEmployee.role === UserRole.EMPLOYEE && (
+            {/* Tab 4: Employee Clearance Bill */}
+            {checkGeneralPermission(currentEmployee, "canClear", globalSettings?.rolePermissions) && (
               <button
                 onClick={() => setActiveTab("clearance")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -314,8 +608,8 @@ export default function App() {
               </button>
             )}
 
-            {/* Tab 5: Accounting review (ACCOUNTANT / ADMIN) */}
-            {(currentEmployee.role === UserRole.ACCOUNTANT || currentEmployee.role === UserRole.ADMIN) && (
+            {/* Tab 5: Accounting review */}
+            {checkGeneralPermission(currentEmployee, "canAudit", globalSettings?.rolePermissions) && (
               <button
                 onClick={() => setActiveTab("accounting")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -332,8 +626,8 @@ export default function App() {
               </button>
             )}
 
-            {/* Tab 5.5: DBD Disbursement Reports (MANAGER / ACCOUNTANT / ADMIN) */}
-            {(currentEmployee.role === UserRole.MANAGER || currentEmployee.role === UserRole.ACCOUNTANT || currentEmployee.role === UserRole.ADMIN) && (
+            {/* Tab 5.5: DBD Disbursement Reports */}
+            {checkGeneralPermission(currentEmployee, "canViewDBD", globalSettings?.rolePermissions) && (
               <button
                 onClick={() => setActiveTab("dbd")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -350,8 +644,8 @@ export default function App() {
               </button>
             )}
 
-            {/* Tab 5.6: Project Cost Budgets (MANAGER / ADMIN) */}
-            {(currentEmployee.role === UserRole.MANAGER || currentEmployee.role === UserRole.ADMIN) && (
+            {/* Tab 5.6: Project Cost Budgets */}
+            {checkGeneralPermission(currentEmployee, "canViewProjectCosts", globalSettings?.rolePermissions) && (
               <button
                 onClick={() => setActiveTab("project_costs")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
@@ -368,134 +662,96 @@ export default function App() {
               </button>
             )}
 
-            {/* Tab 5.1: Original Document Tracking (ACCOUNTANT / ADMIN) */}
-            {(currentEmployee.role === UserRole.ACCOUNTANT || currentEmployee.role === UserRole.ADMIN) && (
-              <button
-                onClick={() => setActiveTab("doc_tracking")}
-                className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                  activeTab === "doc_tracking"
-                    ? "bg-stone-950 text-stone-50 shadow-sm"
-                    : "text-stone-600 hover:bg-stone-50 hover:text-stone-900"
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <FileCheck className="w-4 h-4" />
-                  <span>ติดตามเอกสารตัวจริง</span>
-                </div>
-                <ChevronRight className="w-3.5 h-3.5 opacity-60" />
-              </button>
-            )}
-
-            {/* Tab 5.2: Close Account & Settlements (ACCOUNTANT / ADMIN) */}
-            {(currentEmployee.role === UserRole.ACCOUNTANT || currentEmployee.role === UserRole.ADMIN) && (
-              <button
-                onClick={() => setActiveTab("close_account")}
-                className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                  activeTab === "close_account"
-                    ? "bg-stone-950 text-stone-50 shadow-sm"
-                    : "text-stone-600 hover:bg-stone-50 hover:text-stone-900"
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <Lock className="w-4 h-4" />
-                  <span>ปิดบัญชีรายงวด</span>
-                </div>
-                <ChevronRight className="w-3.5 h-3.5 opacity-60" />
-              </button>
-            )}
-
-            {/* Tab 5.3: Reports (ACCOUNTANT / ADMIN) */}
-            {(currentEmployee.role === UserRole.ACCOUNTANT || currentEmployee.role === UserRole.ADMIN) && (
-              <button
-                onClick={() => setActiveTab("reports")}
-                className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                  activeTab === "reports"
-                    ? "bg-stone-950 text-stone-50 shadow-sm"
-                    : "text-stone-600 hover:bg-stone-50 hover:text-stone-900"
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <BookOpen className="w-4 h-4" />
-                  <span>รายงานบัญชีและภาษี</span>
-                </div>
-                <ChevronRight className="w-3.5 h-3.5 opacity-60" />
-              </button>
-            )}
-
-            {/* General Vault & Audit Tab for Employees */}
-            {currentEmployee.role === UserRole.EMPLOYEE && (
+            {/* Accounting Roles specific modules */}
+            {checkGeneralPermission(currentEmployee, "canAudit", globalSettings?.rolePermissions) && (
               <>
+                {/* Tab 5.1: Original Document Tracking */}
                 <button
-                  onClick={() => setActiveTab("vault")}
+                  onClick={() => setActiveTab("doc_tracking")}
                   className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                    activeTab === "vault"
+                    activeTab === "doc_tracking"
                       ? "bg-stone-950 text-stone-50 shadow-sm"
                       : "text-stone-600 hover:bg-stone-50 hover:text-stone-900"
                   }`}
                 >
                   <div className="flex items-center gap-2.5">
-                    <HardDrive className="w-4 h-4" />
-                    <span>ตู้เก็บเอกสารนิรภัย</span>
+                    <FileCheck className="w-4 h-4" />
+                    <span>ติดตามเอกสารตัวจริง</span>
                   </div>
                   <ChevronRight className="w-3.5 h-3.5 opacity-60" />
                 </button>
 
+                {/* Tab 5.2: Close Account & Settlements */}
                 <button
-                  onClick={() => setActiveTab("audit")}
+                  onClick={() => setActiveTab("close_account")}
                   className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                    activeTab === "audit"
+                    activeTab === "close_account"
                       ? "bg-stone-950 text-stone-50 shadow-sm"
                       : "text-stone-600 hover:bg-stone-50 hover:text-stone-900"
                   }`}
                 >
                   <div className="flex items-center gap-2.5">
-                    <History className="w-4 h-4" />
-                    <span>บันทึกธุรกรรมทั้งหมด</span>
+                    <Lock className="w-4 h-4" />
+                    <span>ปิดบัญชีรายงวด</span>
+                  </div>
+                  <ChevronRight className="w-3.5 h-3.5 opacity-60" />
+                </button>
+
+                {/* Tab 5.3: Reports */}
+                <button
+                  onClick={() => setActiveTab("reports")}
+                  className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
+                    activeTab === "reports"
+                      ? "bg-stone-950 text-stone-50 shadow-sm"
+                      : "text-stone-600 hover:bg-stone-50 hover:text-stone-900"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <BookOpen className="w-4 h-4" />
+                    <span>รายงานบัญชีและภาษี</span>
                   </div>
                   <ChevronRight className="w-3.5 h-3.5 opacity-60" />
                 </button>
               </>
             )}
 
-            {/* Expandable/Dedicated "เพิ่มเติม" section for Executives & Accountants (Manager, Accountant & Admin) */}
-            {(currentEmployee.role === UserRole.MANAGER || currentEmployee.role === UserRole.ADMIN || currentEmployee.role === UserRole.ACCOUNTANT) && (
-              <div className="pt-2.5 mt-2 border-t border-stone-150/60 space-y-1">
-                <p className="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest px-3.5 mb-1.5">เพิ่มเติม (Additional)</p>
-                
-                <button
-                  onClick={() => setActiveTab("vault")}
-                  className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                    activeTab === "vault"
-                      ? "bg-stone-950 text-stone-50 shadow-sm"
-                      : "text-stone-600 hover:bg-stone-50 hover:text-stone-900"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <HardDrive className="w-4 h-4" />
-                    <span>ตู้เก็บเอกสารนิรภัย</span>
-                  </div>
-                  <ChevronRight className="w-3.5 h-3.5 opacity-60" />
-                </button>
+            {/* Expandable/Dedicated "เพิ่มเติม" section */}
+            <div className="pt-2.5 mt-2 border-t border-stone-150/60 space-y-1">
+              <p className="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest px-3.5 mb-1.5">เพิ่มเติม (Additional)</p>
+              
+              <button
+                onClick={() => setActiveTab("vault")}
+                className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
+                  activeTab === "vault"
+                    ? "bg-stone-950 text-stone-50 shadow-sm"
+                    : "text-stone-600 hover:bg-stone-50 hover:text-stone-900"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <HardDrive className="w-4 h-4" />
+                  <span>ตู้เก็บเอกสารนิรภัย</span>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 opacity-60" />
+              </button>
 
-                <button
-                  onClick={() => setActiveTab("audit")}
-                  className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                    activeTab === "audit"
-                      ? "bg-stone-950 text-stone-50 shadow-sm"
-                      : "text-stone-600 hover:bg-stone-50 hover:text-stone-900"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <History className="w-4 h-4" />
-                    <span>บันทึกธุรกรรมทั้งหมด</span>
-                  </div>
-                  <ChevronRight className="w-3.5 h-3.5 opacity-60" />
-                </button>
-              </div>
-            )}
+              <button
+                onClick={() => setActiveTab("audit")}
+                className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
+                  activeTab === "audit"
+                    ? "bg-stone-950 text-stone-50 shadow-sm"
+                    : "text-stone-600 hover:bg-stone-50 hover:text-stone-900"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <History className="w-4 h-4" />
+                  <span>บันทึกธุรกรรมทั้งหมด</span>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 opacity-60" />
+              </button>
+            </div>
 
-            {/* Tab 8: Admin Settings & Configurations (ADMIN ONLY) */}
-            {currentEmployee.role === UserRole.ADMIN && (
+            {/* Tab 8: Admin Settings & Configurations */}
+            {checkGeneralPermission(currentEmployee, "canManageSettings", globalSettings?.rolePermissions) && (
               <button
                 onClick={() => setActiveTab("admin")}
                 className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { collection, doc, onSnapshot } from "firebase/firestore";
+import { collection, doc, onSnapshot, writeBatch } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { Advance, AdvanceStatus, ClearingItem, ClearingLog, Employee } from "../types";
 import { exportToExcel } from "../lib/excelExport";
@@ -7,6 +7,7 @@ import {
   AlertCircle,
   BookOpen,
   Calendar,
+  Database,
   Download,
   Eye,
   FileSpreadsheet,
@@ -142,12 +143,13 @@ export default function AccountingReports() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [projectRecords, setProjectRecords] = useState<GenericRecord[]>([]);
   const [glEntries, setGlEntries] = useState<GenericRecord[]>([]);
-  const [projectCosts, setProjectCosts] = useState<GenericRecord[]>([]);
   const [documentTracking, setDocumentTracking] = useState<GenericRecord[]>([]);
   const [settings, setSettings] = useState<GenericRecord>({});
   const [activeReport, setActiveReport] = useState<ReportKey>("gl");
   const [filters, setFilters] = useState<ReportFilters>(INITIAL_FILTERS);
   const [previewReport, setPreviewReport] = useState<ReportDefinition | null>(null);
+  const [syncingToDb, setSyncingToDb] = useState(false);
+  const [syncSuccessMsg, setSyncSuccessMsg] = useState("");
   const [loadingMap, setLoadingMap] = useState<Record<string, boolean>>({
     advances: true,
     clearingItems: true,
@@ -155,7 +157,6 @@ export default function AccountingReports() {
     employees: true,
     projects: true,
     GL: true,
-    project_costs: true,
     document_tracking: true,
     settings: true,
   });
@@ -201,7 +202,6 @@ export default function AccountingReports() {
       subscribe<Employee>("employees", setEmployees),
       subscribe<GenericRecord>("projects", setProjectRecords),
       subscribe<GenericRecord>("GL", setGlEntries),
-      subscribe<GenericRecord>("project_costs", setProjectCosts),
       subscribe<GenericRecord>("document_tracking", setDocumentTracking),
       subscribe<GenericRecord>("settings", setSettings as any, { docId: "global" }),
     ];
@@ -347,7 +347,6 @@ export default function AccountingReports() {
   }, [advances, enrichedItems, glEntries]);
 
   const projectCostRows = useMemo(() => {
-    if (projectRecords.length === 0 && projectCosts.length > 0) return projectCosts;
     const projectDetails = settings.projectDetails || {};
     const projectBudgets = settings.projectBudgets || {};
     const projectSource = projectRecords.length > 0
@@ -377,7 +376,7 @@ export default function AccountingReports() {
         lastUpdated: new Date().toISOString(),
       };
     });
-  }, [advances, options.projects, projectCosts, projectRecords, settings.projectBudgets, settings.projectDetails]);
+  }, [advances, options.projects, projectRecords, settings.projectBudgets, settings.projectDetails]);
 
   const reportDefinition = useMemo<ReportDefinition>(() => {
     const commonSummary = {
@@ -713,6 +712,242 @@ export default function AccountingReports() {
     return clean;
   });
 
+  const handleSyncReportsToFirestore = async () => {
+    setSyncingToDb(true);
+    setSyncSuccessMsg("");
+    try {
+      const operations: { ref: any; data: any }[] = [];
+
+      // 1. GL Entries (Save to GL collection)
+      derivedGlRows.forEach((entry) => {
+        const docRef = doc(db, "GL", entry.id);
+        operations.push({
+          ref: docRef,
+          data: {
+            id: entry.id,
+            docNo: entry.docNo || "",
+            date: entry.date || "",
+            accountCode: entry.accountCode || "",
+            accountName: entry.accountName || "",
+            category: entry.category || "",
+            description: entry.description || "",
+            debit: Number(entry.debit || 0),
+            credit: Number(entry.credit || 0),
+            employeeName: entry.employeeName || "",
+            projectId: entry.projectId || "",
+            projectName: entry.projectName || "",
+            status: entry.status || "APPROVED",
+            lastUpdatedAt: new Date().toISOString()
+          }
+        });
+      });
+
+      // 2. VAT Entries (Save to vat_entries collection)
+      const vatItems = enrichedItems.filter((item) => Number(item.vatAmount || 0) > 0);
+      vatItems.forEach((item) => {
+        const docRef = doc(db, "vat_entries", `${item.id}-vat`);
+        const matchedProj = projectRecords.find(p => p.id === item.projectId || p.projectId === item.projectId);
+        const projName = matchedProj?.projectName || item.projectId || "";
+        operations.push({
+          ref: docRef,
+          data: {
+            id: `${item.id}-vat`,
+            date: item.documentDate || "",
+            invoiceNo: item.invoiceNo || "",
+            vendorName: item.vendorName || "",
+            vendorTaxId: item.vendorTaxId || "",
+            documentType: item.documentType || "",
+            projectId: item.projectId || "",
+            projectName: projName,
+            vatAmount: Number(item.vatAmount || 0),
+            netAmount: Number(item.netAmount || 0),
+            employeeName: item.employeeName || "",
+            lastUpdatedAt: new Date().toISOString()
+          }
+        });
+      });
+
+      // 3. WHT Entries (Save to wht_entries collection)
+      const whtItems = enrichedItems.filter((item) => Number(item.whtAmount || 0) > 0);
+      whtItems.forEach((item) => {
+        const docRef = doc(db, "wht_entries", `${item.id}-wht`);
+        const matchedProj = projectRecords.find(p => p.id === item.projectId || p.projectId === item.projectId);
+        const projName = matchedProj?.projectName || item.projectId || "";
+        operations.push({
+          ref: docRef,
+          data: {
+            id: `${item.id}-wht`,
+            date: item.documentDate || "",
+            invoiceNo: item.invoiceNo || "",
+            vendorName: item.vendorName || "",
+            vendorTaxId: item.vendorTaxId || "",
+            documentType: item.documentType || "",
+            projectId: item.projectId || "",
+            projectName: projName,
+            whtRate: item.whtRate || "NONE",
+            whtAmount: Number(item.whtAmount || 0),
+            netAmount: Number(item.netAmount || 0),
+            employeeName: item.employeeName || "",
+            lastUpdatedAt: new Date().toISOString()
+          }
+        });
+      });
+
+      // 4. Document Tracking (Save to document_tracking collection)
+      const trackingSource = documentTracking.length > 0
+        ? documentTracking
+        : enrichedItems.map((item) => ({
+            id: item.id,
+            documentNo: item.invoiceNo || item.advId,
+            documentType: item.documentType,
+            status: item.originalDocReceived ? "RECEIVED" : "WAITING_ORIGINAL_DOC",
+            employeeName: item.employeeName,
+            projectId: item.projectId,
+            amount: item.netAmount,
+            createdAt: item.documentDate,
+            vendorName: item.vendorName,
+          }));
+      trackingSource.forEach((row) => {
+        const docRef = doc(db, "document_tracking", row.id);
+        operations.push({
+          ref: docRef,
+          data: {
+            id: row.id,
+            documentNo: row.documentNo || "",
+            documentType: row.documentType || "",
+            employeeName: row.employeeName || "",
+            projectName: row.projectName || row.projectId || "",
+            amount: Number(row.amount || 0),
+            status: row.status || "",
+            createdAt: row.createdAt || "",
+            updatedAt: new Date().toISOString().split("T")[0],
+            originalRequired: row.originalRequired || false,
+            originalReceived: row.originalReceived || false,
+            receivedAt: row.receivedAt || "",
+            receivedBy: row.receivedBy || "",
+            documentCompleteness: row.documentCompleteness || "COMPLETE",
+            note: row.note || ""
+          }
+        });
+      });
+
+      // 5. Projects with Cost Stats (Save directly onto the PROJECTS collection document)
+      projectCostRows.forEach((project) => {
+        const docRef = doc(db, "projects", project.id);
+        operations.push({
+          ref: docRef,
+          data: {
+            totalAdvanceRequested: Number(project.totalAdvanceRequested || 0),
+            totalAdvanceApproved: Number(project.totalAdvanceRequested || 0),
+            totalClearingSubmitted: Number(project.totalClearingApproved || 0),
+            totalClearingApproved: Number(project.totalClearingApproved || 0),
+            outstandingAmount: Number(project.outstandingAmount || 0),
+            remainingPettyCashBudget: Number(project.remainingPettyCashBudget || 0),
+            variance: Number(project.variance || 0),
+            lastUpdatedAt: new Date().toISOString()
+          }
+        });
+      });
+
+      // 6. Vendor Reports (Save to vendor_reports collection)
+      const vendorMap = new Map<string, GenericRecord>();
+      enrichedItems.forEach((item) => {
+        const key = item.vendorName || "ไม่ระบุผู้ขาย";
+        const current = vendorMap.get(key) || { vendorName: key, vendorTaxId: item.vendorTaxId || "", billCount: 0, netAmount: 0, vatAmount: 0, whtAmount: 0 };
+        current.billCount += 1;
+        current.netAmount += Number(item.netAmount || 0);
+        current.vatAmount += Number(item.vatAmount || 0);
+        current.whtAmount += Number(item.whtAmount || 0);
+        vendorMap.set(key, current);
+      });
+      Array.from(vendorMap.values()).forEach((row) => {
+        const slug = row.vendorName.replace(/[^a-zA-Z0-9ก-๙]/g, "_").toLowerCase() || "unknown";
+        const docRef = doc(db, "vendor_reports", slug);
+        operations.push({
+          ref: docRef,
+          data: {
+            id: slug,
+            vendorName: row.vendorName,
+            vendorTaxId: row.vendorTaxId,
+            billCount: row.billCount,
+            netAmount: row.netAmount,
+            vatAmount: row.vatAmount,
+            whtAmount: row.whtAmount,
+            lastUpdatedAt: new Date().toISOString()
+          }
+        });
+      });
+
+      // 7. Employee Outstanding Reports (Save to employee_outstanding_reports collection)
+      const employeeMap = new Map<string, GenericRecord>();
+      advances.forEach((adv) => {
+        const key = adv.employeeId || adv.employeeName || "unknown";
+        const current = employeeMap.get(key) || {
+          employeeId: adv.employeeId || key,
+          employeeName: adv.employeeName || "ไม่ระบุพนักงาน",
+          advanceCount: 0,
+          outstandingCount: 0,
+          requestAmount: 0,
+          outstandingAmount: 0,
+          latestAdvId: "",
+          latestDate: "",
+        };
+        current.advanceCount += 1;
+        current.requestAmount += Number(adv.requestAmount || 0);
+        const outstanding = Number(adv.outstandingAmount || 0);
+        current.outstandingAmount += outstanding;
+        if (outstanding > 0) current.outstandingCount += 1;
+        const advDate = asDate(adv.createdAt);
+        if (!current.latestDate || advDate > current.latestDate) {
+          current.latestDate = advDate;
+          current.latestAdvId = adv.advId;
+        }
+        employeeMap.set(key, current);
+      });
+      Array.from(employeeMap.values()).forEach((row) => {
+        const docRef = doc(db, "employee_outstanding_reports", row.employeeId);
+        operations.push({
+          ref: docRef,
+          data: {
+            id: row.employeeId,
+            employeeId: row.employeeId,
+            employeeName: row.employeeName,
+            advanceCount: row.advanceCount,
+            outstandingCount: row.outstandingCount,
+            requestAmount: row.requestAmount,
+            outstandingAmount: row.outstandingAmount,
+            latestAdvId: row.latestAdvId || "",
+            latestDate: row.latestDate || "",
+            lastUpdatedAt: new Date().toISOString()
+          }
+        });
+      });
+
+      // Execute batches
+      let batch = writeBatch(db);
+      let count = 0;
+      for (const op of operations) {
+        batch.set(op.ref, op.data, { merge: true });
+        count++;
+        if (count >= 450) {
+          await batch.commit();
+          batch = writeBatch(db);
+          count = 0;
+        }
+      }
+      if (count > 0) {
+        await batch.commit();
+      }
+
+      setSyncSuccessMsg(`ประมวลผลและบันทึกรายงานลง Firestore สำเร็จ! รวม ${operations.length} รายการ (แยกประเภท: GL, VAT, WHT, ติดตามเอกสาร, สรุปผู้ขาย, ยอดค้างสะสม และงบโครงการบนฐานข้อมูล)`);
+    } catch (err: any) {
+      console.error("Error syncing reports to Firestore:", err);
+      alert(`ไม่สามารถบันทึกรายงานได้: ${err.message}`);
+    } finally {
+      setSyncingToDb(false);
+    }
+  };
+
   const fileBaseName = `${reportDefinition.key}_report_${new Date().toISOString().slice(0, 10)}`;
 
   return (
@@ -732,8 +967,21 @@ export default function AccountingReports() {
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
+            onClick={handleSyncReportsToFirestore}
+            disabled={syncingToDb}
+            className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+          >
+            {syncingToDb ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <Database className="w-4 h-4" />
+            )}
+            {syncingToDb ? "กำลังบันทึก..." : "บันทึกรายงานลงฐานข้อมูล"}
+          </button>
+          <button
+            type="button"
             onClick={() => setPreviewReport(reportDefinition)}
-            className="px-3.5 py-2 bg-stone-950 hover:bg-stone-900 text-white rounded-xl text-xs font-bold flex items-center gap-1.5"
+            className="px-3.5 py-2 bg-stone-950 hover:bg-stone-900 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
           >
             <Eye className="w-4 h-4" /> Preview
           </button>
@@ -741,7 +989,7 @@ export default function AccountingReports() {
             type="button"
             onClick={() => exportToExcel(exportRows, fileBaseName, "Report")}
             disabled={reportDefinition.rows.length === 0}
-            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5"
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
           >
             <FileSpreadsheet className="w-4 h-4" /> Excel
           </button>
@@ -749,12 +997,29 @@ export default function AccountingReports() {
             type="button"
             onClick={() => exportToCsv(exportRows, reportDefinition.columns, fileBaseName)}
             disabled={reportDefinition.rows.length === 0}
-            className="px-3.5 py-2 bg-white border border-stone-200 hover:bg-stone-50 disabled:opacity-50 text-stone-700 rounded-xl text-xs font-bold flex items-center gap-1.5"
+            className="px-3.5 py-2 bg-white border border-stone-200 hover:bg-stone-50 disabled:opacity-50 text-stone-700 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
           >
             <Download className="w-4 h-4" /> CSV
           </button>
         </div>
       </div>
+
+      {syncSuccessMsg && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 flex items-start gap-3 shadow-xs">
+          <Database className="w-5 h-5 text-indigo-600 mt-0.5 shrink-0" />
+          <div className="flex-1 space-y-1">
+            <h4 className="text-xs font-bold text-indigo-950">อัปเดตข้อมูลบัญชีลงฐานข้อมูลสำเร็จ!</h4>
+            <p className="text-xs text-indigo-700 leading-relaxed font-medium">{syncSuccessMsg}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSyncSuccessMsg("")}
+            className="p-1 hover:bg-indigo-100 rounded-lg text-indigo-400 hover:text-indigo-600 transition shrink-0 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       <div className="bg-white border border-stone-200 rounded-2xl p-4 shadow-xs space-y-4">
         <div className="flex gap-2 overflow-x-auto pb-1">

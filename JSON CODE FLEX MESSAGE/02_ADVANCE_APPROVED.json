@@ -1,0 +1,322 @@
+{
+  "type": "flex",
+  "altText": "อนุมัติคำขอเบิกแล้ว - {advNo}",
+  "contents": {
+    "type": "bubble",
+    "size": "mega",
+    "styles": {
+      "body": {
+        "backgroundColor": "#F6F8FA"
+      },
+      "footer": {
+        "backgroundColor": "#F6F8FA"
+      }
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "paddingAll": "20px",
+      "spacing": "md",
+      "contents": [
+        {
+          "type": "box",
+          "layout": "horizontal",
+          "contents": [
+            {
+              "type": "box",
+              "layout": "vertical",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "ADVANCE PRO",
+                  "size": "xs",
+                  "color": "#94A3B8",
+                  "wrap": true,
+                  "weight": "bold"
+                },
+                {
+                  "type": "text",
+                  "text": "อนุมัติคำขอเบิกแล้ว",
+                  "size": "lg",
+                  "color": "#1F2937",
+                  "wrap": true,
+                  "weight": "bold",
+                  "margin": "xs"
+                }
+              ],
+              "flex": 8
+            },
+            {
+              "type": "box",
+              "layout": "vertical",
+              "contents": [
+                {
+                  "type": "box",
+                  "layout": "vertical",
+                  "backgroundColor": "#EFF6FF",
+                  "cornerRadius": "999px",
+                  "paddingTop": "5px",
+                  "paddingBottom": "5px",
+                  "paddingStart": "10px",
+                  "paddingEnd": "10px",
+                  "contents": [
+                    {
+                      "type": "text",
+                      "text": "รอโอนเงิน",
+                      "size": "xs",
+                      "color": "#2563EB",
+                      "wrap": true,
+                      "weight": "bold",
+                      "align": "center"
+                    }
+                  ]
+                }
+              ],
+              "flex": 4,
+              "alignItems": "flex-end"
+            }
+          ]
+        },
+        {
+          "type": "separator",
+          "margin": "lg",
+          "color": "#DDE7E6"
+        },
+        {
+          "type": "box",
+          "layout": "horizontal",
+          "margin": "lg",
+          "contents": [
+            {
+              "type": "text",
+              "text": "เลขที่ใบเบิก",
+              "size": "xs",
+              "color": "#64748B",
+              "wrap": true,
+              "flex": 4
+            },
+            {
+              "type": "text",
+              "text": "{advNo}",
+              "size": "md",
+              "color": "#4E958D",
+              "wrap": true,
+              "weight": "bold",
+              "align": "end",
+              "flex": 8
+            }
+          ]
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F8FAFC",
+          "cornerRadius": "20px",
+          "borderColor": "#E2E8F0",
+          "borderWidth": "1px",
+          "paddingAll": "16px",
+          "contents": [
+            {
+              "type": "text",
+              "text": "ยอดอนุมัติ",
+              "size": "xs",
+              "color": "#64748B",
+              "wrap": true,
+              "weight": "bold",
+              "align": "center"
+            },
+            {
+              "type": "text",
+              "text": "{approvedAmount}",
+              "size": "xxl",
+              "color": "#16A34A",
+              "wrap": true,
+              "weight": "bold",
+              "align": "center",
+              "margin": "sm"
+            },
+            {
+              "type": "text",
+              "text": "บาท",
+              "size": "xs",
+              "color": "#64748B",
+              "wrap": true,
+              "align": "center",
+              "margin": "xs"
+            }
+          ]
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#FFFFFF",
+          "cornerRadius": "20px",
+          "borderColor": "#E5E7EB",
+          "borderWidth": "1px",
+          "paddingAll": "16px",
+          "spacing": "xs",
+          "contents": [
+            {
+              "type": "text",
+              "text": "รายละเอียด",
+              "size": "xs",
+              "color": "#4E958D",
+              "wrap": true,
+              "weight": "bold"
+            },
+            {
+              "type": "separator",
+              "margin": "sm",
+              "color": "#EEF2F7"
+            },
+            {
+              "type": "box",
+              "layout": "horizontal",
+              "spacing": "md",
+              "margin": "sm",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "ผู้อนุมัติ",
+                  "size": "xs",
+                  "color": "#64748B",
+                  "wrap": true,
+                  "flex": 5
+                },
+                {
+                  "type": "text",
+                  "text": "{approvedByName}",
+                  "size": "sm",
+                  "color": "#1F2937",
+                  "wrap": true,
+                  "weight": "bold",
+                  "align": "end",
+                  "flex": 7
+                }
+              ]
+            },
+            {
+              "type": "box",
+              "layout": "horizontal",
+              "spacing": "md",
+              "margin": "sm",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "ผู้เบิก",
+                  "size": "xs",
+                  "color": "#64748B",
+                  "wrap": true,
+                  "flex": 5
+                },
+                {
+                  "type": "text",
+                  "text": "{employeeName}",
+                  "size": "sm",
+                  "color": "#1F2937",
+                  "wrap": true,
+                  "weight": "bold",
+                  "align": "end",
+                  "flex": 7
+                }
+              ]
+            },
+            {
+              "type": "box",
+              "layout": "horizontal",
+              "spacing": "md",
+              "margin": "sm",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "โครงการ",
+                  "size": "xs",
+                  "color": "#64748B",
+                  "wrap": true,
+                  "flex": 5
+                },
+                {
+                  "type": "text",
+                  "text": "{projectName}",
+                  "size": "sm",
+                  "color": "#1F2937",
+                  "wrap": true,
+                  "weight": "bold",
+                  "align": "end",
+                  "flex": 7
+                }
+              ]
+            },
+            {
+              "type": "box",
+              "layout": "horizontal",
+              "spacing": "md",
+              "margin": "sm",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "สถานะถัดไป",
+                  "size": "xs",
+                  "color": "#64748B",
+                  "wrap": true,
+                  "flex": 5
+                },
+                {
+                  "type": "text",
+                  "text": "รอโอนเงิน",
+                  "size": "sm",
+                  "color": "#1F2937",
+                  "wrap": true,
+                  "weight": "bold",
+                  "align": "end",
+                  "flex": 7
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "footer": {
+      "type": "box",
+      "layout": "vertical",
+      "paddingAll": "16px",
+      "spacing": "sm",
+      "contents": [
+        {
+          "type": "button",
+          "height": "sm",
+          "style": "secondary",
+          "action": {
+            "type": "uri",
+            "label": "คัดลอกเลขบัญชี",
+            "uri": "{liffCopyBankUrl}"
+          },
+          "color": "#E5E7EB"
+        },
+        {
+          "type": "button",
+          "height": "sm",
+          "style": "primary",
+          "action": {
+            "type": "uri",
+            "label": "แนบสลิปโอนเงิน",
+            "uri": "{liffAttachTransferSlipUrl}"
+          },
+          "color": "#4E958D"
+        },
+        {
+          "type": "button",
+          "height": "sm",
+          "style": "secondary",
+          "action": {
+            "type": "uri",
+            "label": "ดูรายละเอียด",
+            "uri": "{liffDetailUrl}"
+          },
+          "color": "#E5E7EB"
+        }
+      ]
+    }
+  }
+}

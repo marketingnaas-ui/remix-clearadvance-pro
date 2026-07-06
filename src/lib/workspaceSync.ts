@@ -23,7 +23,10 @@ const GOOGLE_TOKEN_EXPIRES_KEY = "clearadvance_google_access_token_expires_at";
 const SHEET_TITLES: Record<string, string> = {
   employees: "Employees",
   projects: "Projects",
-  project_costs: "ProjectCosts",
+  vat_entries: "VATEntries",
+  wht_entries: "WHTEntries",
+  vendor_reports: "VendorReports",
+  employee_outstanding_reports: "EmployeeOutstanding",
   advances: "Advances",
   clearingLogs: "ClearingLogs",
   clearingItems: "ClearingItems",
@@ -332,7 +335,6 @@ export async function syncDatabaseToSheets(spreadsheetId: string, token: string)
   const projectsSnap = await getDocs(collection(db, "projects"));
   const glSnap = await getDocs(collection(db, "GL"));
   const docTrackingSnap = await getDocs(collection(db, "document_tracking"));
-  const projectCostsSnap = await getDocs(collection(db, "project_costs"));
 
   const advances = advancesSnap.docs.map((docSnap) => docSnap.data());
   const clearingItems = clearingItemsSnap.docs.map((docSnap) => docSnap.data());
@@ -340,7 +342,6 @@ export async function syncDatabaseToSheets(spreadsheetId: string, token: string)
   const projects = projectsSnap.docs.map((docSnap) => docSnap.data());
   const glEntries = glSnap.docs.map((docSnap) => docSnap.data());
   const docTrackings = docTrackingSnap.docs.map((docSnap) => docSnap.data());
-  const projectCosts = projectCostsSnap.docs.map((docSnap) => docSnap.data());
 
   // 2. Format Advances Data
   const advancesHeaders = [
@@ -502,7 +503,7 @@ export async function syncDatabaseToSheets(spreadsheetId: string, token: string)
     ])
   ];
 
-  // 8. Format Project Costs Data
+  // 8. Format Project Costs Data (Merged with Projects)
   const projectCostsHeaders = [
     "ชื่อโครงการ (projectName)",
     "งบประมาณโครงการ (contractBudget)",
@@ -517,17 +518,17 @@ export async function syncDatabaseToSheets(spreadsheetId: string, token: string)
   ];
   const projectCostsRows = [
     projectCostsHeaders,
-    ...projectCosts.map((cost) => [
-      cost.projectName || "",
-      cost.contractBudget || 0,
-      cost.pettyCashBudget || 0,
-      cost.totalAdvanceRequested || 0,
-      cost.totalAdvanceApproved || 0,
-      cost.totalClearingSubmitted || 0,
-      cost.totalClearingApproved || 0,
-      cost.remainingPettyCashBudget || 0,
-      cost.variance || 0,
-      cost.lastUpdated || ""
+    ...projects.map((proj) => [
+      proj.projectName || proj.name || "",
+      proj.contractAmount || proj.contractBudget || 0,
+      proj.pettyCashBudget || 0,
+      proj.totalAdvanceRequested || 0,
+      proj.totalAdvanceApproved || 0,
+      proj.totalClearingSubmitted || 0,
+      proj.totalClearingApproved || 0,
+      proj.remainingPettyCashBudget || 0,
+      proj.variance || 0,
+      proj.lastUpdatedAt || proj.updatedAt || ""
     ])
   ];
 

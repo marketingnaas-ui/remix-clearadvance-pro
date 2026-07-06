@@ -69,7 +69,12 @@ export interface Employee {
   nickname?: string; // Employee nickname
   email?: string;
   phone?: string;
-  role: UserRole;
+  role: UserRole; // Still here for backward compatibility
+  roleId?: string; // e.g. "employee", "foreman", "pm", "accounting", "executive", "ceo", "admin"
+  positionId?: string;
+  positionName?: string;
+  managedProjectIds?: string[];
+  projectIds?: string[];
   pinHash: string; // SHA-256 hashed PIN
   lineUserId?: string;
   lineDisplayName?: string;
@@ -356,11 +361,68 @@ export interface ExecutiveAIAnswer {
 
 export interface ApprovalFlowRule {
   id: string;
-  name: string;
+  name?: string; // optional for backward compatibility
   minAmount: number;
-  maxAmount: number;
-  approverRole: string; // e.g., "MANAGER" | "ACCOUNTANT" | "ADMIN"
+  maxAmount: number | null; // allow null for no max limit
+  approverRole?: string; // Legacy field
+  approverRoles?: string[]; // Legacy
+  approverRoleIds?: string[];
+  approverPositionIds?: string[];
+  projectScope?: "own" | "own_project" | "all_projects" | "specific_projects" | "selected_projects";
+  selectedProjectIds?: string[];
+  documentType?: "ADVANCE" | "CLEARING" | "BOTH";
+  allowLineLiffApproval?: boolean;
+  canApproveOwnRequest?: boolean;
+  allowBatchApproval?: boolean;
+  requiredApprovalCount?: number;
+  approvalOrder?: "any" | "sequential";
   isActive: boolean;
+  threshold?: number; // Legacy
+  autoApproveAccounting?: boolean; // Legacy
+}
+
+export interface RolePermissionConfig {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string;
+  isActive: boolean;
+  level: number;
+  permissions: {
+    viewDashboard: boolean;
+    createAdvance: boolean;
+    approveAdvance: boolean;
+    rejectAdvance: boolean;
+    batchApproveAdvance: boolean;
+    uploadTransferSlip: boolean;
+    submitClearance: boolean;
+    reviewClearance: boolean;
+    closeAdvance: boolean;
+    viewExecutiveReport: boolean;
+    manageSettings: boolean;
+    manageUsers: boolean;
+    manageProjects: boolean;
+    manageRoles: boolean;
+  };
+  approvalScope: {
+    projectScope: "own" | "own_project" | "all_projects" | "selected_projects";
+    maxAmountPerItem: number | null;
+    maxAmountPerDay: number | null;
+    canApproveOwnRequest: boolean;
+    requirePin: boolean;
+    allowLineLiffApproval: boolean;
+  };
+  dashboard: {
+    heroType: "profile" | "approval" | "accounting" | "executive" | "system";
+    menuVariant: string;
+    kpiPreset: string;
+  };
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface RolePermissionsConfigRoot {
+  roles: RolePermissionConfig[];
 }
 
 export interface DocumentTemplateConfig {
@@ -373,12 +435,75 @@ export interface DocumentTemplateConfig {
   authorizedSignatureName: string;
 }
 
+export interface LineTrigger {
+  id: string;
+  name: string;
+  isActive: boolean;
+  type: "text" | "flex";
+  altText?: string;
+  messageTemplate?: string;
+
+  recipientMode?: "requester" | "approvers" | "accounting" | "all" | "target" | "custom";
+  recipientRoles?: UserRole[];
+
+  sendToGroup?: boolean;
+  sendToUsers?: boolean;
+  alsoSendToRequester?: boolean;
+  useApprovalWorkflowRules?: boolean;
+
+  includeLiffActions?: boolean;
+  liffActionMode?: "approveReject" | "uploadSlip" | "viewOnly" | "none";
+}
+
+export interface LineMessagingConfig {
+  channelAccessToken?: string;
+  channelSecret?: string;
+  liffId?: string;
+
+  appBaseUrl?: string;
+  webhookUrl?: string;
+  liffBaseUrl?: string;
+
+  groupId?: string;
+  groupName?: string;
+  enableGroupNotification?: boolean;
+
+  testTargetEmployeeId?: string;
+
+  triggers?: LineTrigger[];
+
+  dailyReportEnabled?: boolean;
+  dailyReportTime?: string;
+  weeklyReportEnabled?: boolean;
+  weeklyReportDay?: string;
+  weeklyReportTime?: string;
+  sendReportToGroup?: boolean;
+  sendReportToRoles?: UserRole[];
+}
+
+export interface LineActionLog {
+  id: string;
+  advId: string;
+  action: string;
+  status: string;
+  lineUserId: string;
+  employeeId: string;
+  employeeName: string;
+  role: string;
+  source: "LINE_LIFF" | "LINE_WEBHOOK" | "SYSTEM";
+  requestPayload?: any;
+  responsePayload?: any;
+  createdAt?: string;
+  timestamp: string;
+}
+
 export interface SystemSettings {
   id: string; // "global"
   projects: string[];
   categories: string[];
   documentTypes: string[];
-  lineConfig: {
+  positions: string[];
+  lineConfig?: {
     notifyToken?: string;
     liffId?: string;
     alerts?: {
@@ -388,10 +513,15 @@ export interface SystemSettings {
       onDocReturn: boolean;
     };
   };
+  lineMessagingConfig?: LineMessagingConfig;
   runningNumbers: {
     yearMonth: string; // YYMM
     lastSequence: number; // e.g., 5
   };
-  approvalFlowRules?: ApprovalFlowRule[];
+  approvalWorkflow?: {
+    rules: ApprovalFlowRule[];
+  };
+  approvalFlowRules?: ApprovalFlowRule[]; // Legacy
+  rolePermissions?: RolePermissionsConfigRoot;
   documentTemplates?: DocumentTemplateConfig;
 }
